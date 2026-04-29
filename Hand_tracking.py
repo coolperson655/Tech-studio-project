@@ -110,9 +110,7 @@ def normalize_curl(degrees, min_deg=0, max_deg=160):
     for degree in degrees:
         output = np.clip((degree - min_deg) / (max_deg - min_deg), 0.0, 1.0)
         return_list.append(output)
-
-
-    return return_list[0], return_list[1], return_list[2], return_list[3], 
+    return return_list
 
 def draw_bar(value, width=30):
     filled = int(value * width)
