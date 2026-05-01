@@ -26,6 +26,28 @@ Main loop:
 * do test movements and have user confrom comfort
 '''
 
+class linearized_mapper:
+    def __init__(self, raw_data):
+        raw_data = np.asarray(raw_data)
+
+        # Ensure monotonically increasing data
+        raw_data = np.sort(raw_data)
+
+        self.input_scale = np.linspace(0, 100, len(raw_data))
+        self.output_data = raw_data
+
+    def __call__(self, x):
+        x = np.clip(x, 0, 100)
+        return np.interp(x, self.input_scale, self.output_data)
+    
+    # data = np.exp(np.linspace(0, 5, 1000))  # exponential curve
+
+    # mapper = LinearizedMapper(data)
+
+    # mapper(0)     # smallest value
+    # mapper(50)    # middle of stretched range
+    # mapper(100)   # largest value
+
 client = ht.client
 frame_queue = Queue(maxsize=1)
 
@@ -130,6 +152,7 @@ while calibrating == True:
     breaker = False
     while state == "CALIBRATING":
         for servo_pin in servo_pin_list:
+            intensities = np.empty(1)
             if breaker:
                 break
             for intensity in range(starting_stim,max_stim + 1):
@@ -139,7 +162,9 @@ while calibrating == True:
                 curl_rates = abs(np.array(curls) - np.array(previous_curls))
                 previous_curls = curls
                 curl_stable = curl_rates <= MAX_CURL_RATE
+                # NEED TO MAKE FULL ARRAYS OF BEFORE ADDING TO DICT
                 if curl_stable:
+                    np.append(intensities,intensity)
                     calibration_data[servo_pin] = [intensity, np.array(curl_rates), np.array(curls)]
                     
                 else:
@@ -149,4 +174,17 @@ while calibrating == True:
                     break
 
 # use calibration values to determine which servo is best for each finger
-
+pin_2_curl = {} # pin:[string of finger, avg difference]
+for pin in calibration_data:
+    stim_i, delta_curls, pin_curls = calibration_data[pin]
+    clearest_curl = None
+    clearest_name = None
+    for curl,name in zip(pin_curls, ['IM','RP','T']):
+        subtractors = pin_curls.remove(curl)
+        current_curl = curl
+        for thing in subtractors:
+           current_curl = np.subtract(current_curl,thing)
+        if current_curl > clearest_curl: # might need to change this bc its arrays
+            clearest_curl = current_curl
+            clearest_name = name
+        pin_2_curl[pin] = [clearest_name, np.mean(clearest_curl)]

@@ -87,7 +87,6 @@ def get_feedback_values(curl_vals,feedback_func,normalized=True):
             output[i] = (output[i] - 0) / (1 - 0)
     return output
 
-
 def feedback_fuction(val:float) ->float:
     return float(val * 0.3)
 # def finger_curl(joint_positions):
