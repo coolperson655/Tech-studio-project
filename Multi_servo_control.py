@@ -36,7 +36,7 @@ def set_intensity(v_:int, servo_pin_num:str) -> None:
 try:
     load_dotenv()
     COM_PORT:str = os.getenv("COM_PORT")
-    BOARD = Arduino('COM5')
+    BOARD = Arduino(COM_PORT)
     PINS:dict[int, Pin] = {i : BOARD.get_pin(servo_d_pin_str(i)) for i in range(2, 14, 2)}  # claim pins [2,4,6,8,10,12]
 
     # not sure if you're using this still
