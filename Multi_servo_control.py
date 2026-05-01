@@ -1,6 +1,8 @@
 import pyfirmata2
 import time
 import serial
+from pyfirmata2 import Pin, Arduino
+import random
 
 # list usb devices
 # import serial.tools.list_ports
@@ -9,46 +11,63 @@ import serial
 #     print(p)
 # exit()
 
+
+
+def servo_d_pin_str(i_:int) -> str:
+    return 'd:' + str(i_) + ':s'
+
+def set_servo(v_:int, servo_pin_:int) -> None:
+    global PINS
+    PINS[servo_pin_].write(v_)
+
+
+def set_intensity(v_:int, servo_pin_num:str) -> None:
+    global SERVO_RANGE
+    if v_ > 100: v_ = 100
+    if v_ < 0: v_ = 0
+    norm = v_/100
+    abs_pos = norm*(SERVO_RANGE[1]-SERVO_RANGE[0]) + SERVO_RANGE[0]
+    set_servo(abs_pos, int(servo_pin_num))
+
+
+# board initialization
 try:
-    board = pyfirmata2.Arduino('COM5')
+    BOARD = Arduino('COM5')
+    PINS:dict[int, Pin] = {i : BOARD.get_pin(servo_d_pin_str(i)) for i in range(2, 14, 2)}  # claim pins [2,4,6,8,10,12]
+
+    # not sure if you're using this still
+    SERVO_RANGE:list[int] = [130, 193]  # actual mechanical limits of servo range when attached to tens
+
 except AttributeError as e:
     raise RuntimeError("Tens Arduino appears to be unplugged.")
 except serial.serialutil.SerialException:
     raise RuntimeError("tens Arduino appears to be unplugged.")
 
-# digital:pin5:seeervo...?
-servo_range:list[int] = [130, 193]  # actual mechanical limits of servo range when attached to tens
 
-
-
-def set_servo(v_:int, servo_pin_num:str) -> None:
-    servo_pin = 'd:' + str(servo_pin_num) + ':s'
-    servo_pin.write(v_)
-
-
-def set_intensity(v_:int, servo_pin_num:str) -> None:
-    servo_pin_i = 'd:' + str(servo_pin_num) + ':s'
-    global servo_range
-    if v_ > 100: v_ = 100
-    if v_ < 0: v_ = 0
-    norm = v_/100
-    abs_pos = norm*(servo_range[1]-servo_range[0]) + servo_range[0]
-    set_servo(abs_pos,servo_pin_i)
 
 
 def main():
     """
     set servo position to arbitrary position
     """
-    set_servo(servo_range[0], '5')
     while True:
         try:
-            vstr = input("val: ")
-            pin_num = input('pin num:')
-            if vstr == '': v = 0
-            else: v = int(vstr)
+            # # user setting
+            # vstr = input("val: ")
+            # pin_num = input('pin num:')
+            # if vstr == '': v = 0
+            # else: v = int(vstr)
+            # set_intensity(v, pin_num)
 
-            set_intensity(v, pin_num)
+            # loop to test
+            sleep_amt:float = 0
+            while 1:
+                for i in range(2,14,2):
+                    v = random.randint(0,100)
+                    set_intensity(v, i)               
+                    time.sleep(sleep_amt)
+
+
         except KeyboardInterrupt:
             exit()
 
