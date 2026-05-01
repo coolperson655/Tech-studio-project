@@ -5,6 +5,7 @@ description = "tens-based grip feedback using camera-based hand tracking"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "dotenv>=0.9.9",
     "pyfirmata2>=2.5.1",
     "pyserial",
 ]

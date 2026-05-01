@@ -7,6 +7,11 @@ uv for python environment my goat [https://docs.astral.sh/uv/getting-started/ins
 # Demos
 ## Multi_servo_control.py
 `Multi_servo_control.py` contains code to set the positions of the servo.
+you will need to add a `.env` file to your project which defines your com port
+ex.
+```env
+COM_PORT=COM5
+```
 
 | :warning: WARNING           |
 |:----------------------------|

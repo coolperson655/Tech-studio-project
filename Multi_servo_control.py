@@ -3,6 +3,8 @@ import time
 import serial
 from pyfirmata2 import Pin, Arduino
 import random
+import os
+from dotenv import load_dotenv
 
 # list usb devices
 # import serial.tools.list_ports
@@ -32,7 +34,9 @@ def set_intensity(v_:int, servo_pin_num:str) -> None:
 
 # board initialization
 try:
-    BOARD = Arduino('/dev/tty.usbmodem1401') # /dev/tty.usbmodem1401 MAC PORT WINDOWS is COM5
+    load_dotenv()
+    COM_PORT:str = os.getenv("COM_PORT")
+    BOARD = Arduino('COM5')
     PINS:dict[int, Pin] = {i : BOARD.get_pin(servo_d_pin_str(i)) for i in range(2, 14, 2)}  # claim pins [2,4,6,8,10,12]
 
     # not sure if you're using this still
