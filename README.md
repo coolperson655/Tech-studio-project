@@ -2,7 +2,7 @@ awe yeah we love documentation
 
 
 # Python Environment
-uv for python environment my goat (https://docs.astral.sh/uv/getting-started/installation/)[(here's the install)]
+uv for python environment my goat [https://docs.astral.sh/uv/getting-started/installation/](here's the install)]
 
 # Demos
 ## Multi_servo_control.py
