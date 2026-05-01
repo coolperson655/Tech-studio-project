@@ -32,7 +32,7 @@ def set_intensity(v_:int, servo_pin_num:str) -> None:
 
 # board initialization
 try:
-    BOARD = Arduino('COM5')
+    BOARD = Arduino('/dev/tty.usbmodem1401') # /dev/tty.usbmodem1401 MAC PORT WINDOWS is COM5
     PINS:dict[int, Pin] = {i : BOARD.get_pin(servo_d_pin_str(i)) for i in range(2, 14, 2)}  # claim pins [2,4,6,8,10,12]
 
     # not sure if you're using this still
@@ -60,12 +60,24 @@ def main():
             # set_intensity(v, pin_num)
 
             # loop to test
-            sleep_amt:float = 0
-            while 1:
-                for i in range(2,14,2):
-                    v = random.randint(0,100)
-                    set_intensity(v, i)               
-                    time.sleep(sleep_amt)
+            sleep_amt:float = 1
+            # while 1:
+            #     for i in range(2,14,2):
+            #         v = random.randint(0,100)
+            #         set_intensity(v, i)               
+            #         time.sleep(sleep_amt)
+            v = 0
+            while 2:
+                v += 20
+                if v > 100:
+                    v = 0
+                set_intensity(v, 2)  
+                set_intensity(v, 4)  
+                set_intensity(v, 6)  
+                set_intensity(v, 8)  
+                set_intensity(v, 10)  
+                set_intensity(v, 12)
+                time.sleep(sleep_amt)   
 
 
         except KeyboardInterrupt:

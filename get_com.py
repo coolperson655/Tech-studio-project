@@ -15,4 +15,4 @@ if __name__ == "__main__":
     # Posted by tfeldmann
     # Retrieved 2026-05-01, License - CC BY-SA 3.0
     import glob
-    glob.glob('/dev/tty.*')
+    print(glob.glob('/dev/tty.*'))
