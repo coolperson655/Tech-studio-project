@@ -126,7 +126,7 @@ calibrating = True
 previous_curl = None
 max_stim = 50
 starting_stim = 20
-servo_pin_list = [1,2,3,4,5,6]
+servo_pin_list = [2,4,6,8,10,12]
 calibration_data = {} # each point in dict is pinnum:[stim intensity, [IM deltacurl, RP deltacurl, T deltacurl], [IM curl, RP curl, T curl]]
 
 while calibrating == True:

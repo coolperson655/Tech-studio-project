@@ -137,8 +137,9 @@ client = HTSClient(
 print('starting')
 for frame in client.iter_events():
     curls = normalize_curl(finger_curls(frame))
+    print(end='\r')
     for curl in curls:
-        print('index', draw_bar(curl))
+        print('index', draw_bar(curl),end='')
 
     # print('index', draw_bar(index_curl), 'middle', draw_bar(middle_curl), 'ring', draw_bar(ring_curl),'pinky', draw_bar(pinky_curl))
     
