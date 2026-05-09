@@ -56,7 +56,7 @@ def main():
     """
     while True:
         try:
-            # # user setting
+            # user setting
             # vstr = input("val: ")
             # pin_num = input('pin num:')
             # if vstr == '': v = 0
@@ -64,23 +64,23 @@ def main():
             # set_intensity(v, pin_num)
 
             # loop to test
-            sleep_amt:float = 1
-            # while 1:
-            #     for i in range(2,14,2):
-            #         v = random.randint(0,100)
-            #         set_intensity(v, i)               
-            #         time.sleep(sleep_amt)
+            sleep_amt:float = 0
+            # # while 1:
+            # #     for i in range(2,14,2):
+            # #         v = random.randint(0,100)
+            # #         set_intensity(v, i)               
+            # #         time.sleep(sleep_amt)
             v = 0
             while 2:
-                v += 20
+                v += 1
                 if v > 100:
                     v = 0
                 set_intensity(v, 2)  
-                set_intensity(v, 4)  
-                set_intensity(v, 6)  
-                set_intensity(v, 8)  
-                set_intensity(v, 10)  
-                set_intensity(v, 12)
+                # set_intensity(v, 4)  
+                # set_intensity(v, 6)  
+                # set_intensity(v, 8)  
+                # set_intensity(v, 10)  
+                # set_intensity(v, 12)
                 time.sleep(sleep_amt)   
 
 

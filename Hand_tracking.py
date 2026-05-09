@@ -115,15 +115,14 @@ def draw_bar(value, width=30):
     filled = int(value * width)
     return "[" + "#" * filled + "-" * (width - filled) + "]"
 
-
-
-client = HTSClient(
-    HTSClientConfig(
-        output=StreamOutput.FRAMES,
-        host="0.0.0.0",
-        port=9000,
+def create_client(output=StreamOutput.FRAMES, host="0.0.0.0", port=8000,):
+    return HTSClient(
+        HTSClientConfig(
+            output=output,
+            host=host,
+            port=port,
+        )
     )
-)
 
 # plt.ion()
 # fig, ax = plt.subplots()
@@ -133,24 +132,25 @@ client = HTSClient(
 # ax.set_ylabel("Curl")
 
 # print(get_feedback_values([0.3,0.4,0.5],feedback_fuction))
+if __name__ == '__main__':
+    client = create_client()
+    print('starting')
+    for frame in client.iter_events():
+        curls = normalize_curl(finger_curls(frame))
+        print(end='\r')
+        for curl in curls:
+            print('index', draw_bar(curl),end='')
 
-print('starting')
-for frame in client.iter_events():
-    curls = normalize_curl(finger_curls(frame))
-    print(end='\r')
-    for curl in curls:
-        print('index', draw_bar(curl),end='')
-
-    # print('index', draw_bar(index_curl), 'middle', draw_bar(middle_curl), 'ring', draw_bar(ring_curl),'pinky', draw_bar(pinky_curl))
-    
-    
-    
-    
-    
-    # time.sleep(0.25)
-    # x, y, z = frame.get_joint(JointName.INDEX_TIP)
-    # print(f"index tip xyz=({x:.5f}, {y:.5f}, {z:.5f})")
-    # index_joints = frame.get_finger("index")
-    # print(index_joints[JointName.INDEX_PROXIMAL])
-    # time.sleep(3)
-    # print('==================')
+        # print('index', draw_bar(index_curl), 'middle', draw_bar(middle_curl), 'ring', draw_bar(ring_curl),'pinky', draw_bar(pinky_curl))
+        
+        
+        
+        
+        
+        # time.sleep(0.25)
+        # x, y, z = frame.get_joint(JointName.INDEX_TIP)
+        # print(f"index tip xyz=({x:.5f}, {y:.5f}, {z:.5f})")
+        # index_joints = frame.get_finger("index")
+        # print(index_joints[JointName.INDEX_PROXIMAL])
+        # time.sleep(3)
+        # print('==================')
