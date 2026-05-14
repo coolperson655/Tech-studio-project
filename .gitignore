@@ -3,3 +3,4 @@ __pycache__
 .env
 Test notebook.ipynb
 testing_for_tracking.py
+clearvars.py
