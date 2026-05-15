@@ -8,7 +8,8 @@ import Multi_servo_control as msc
 from queue import Queue
 import threading
 import pandas as pd
-import sys 
+import sys
+import seaborn as sns 
 
 from collections import defaultdict
 
@@ -170,6 +171,123 @@ def create_mapping_df(servo_pins:list,
         state = 'finished'
         return return_df
 
+
+def build_curl_controller(df, target="IMCURL", others=("RPCURL", "TCURL"), thresh=0.05):
+
+    reactive = df.dropna(subset=[target])
+
+    score = (
+        reactive
+        .assign(
+            selectivity=lambda x:
+                x[target].abs()
+                - x[list(others)].abs().sum(axis=1)
+        )
+        .groupby(level="servo pin")["selectivity"]
+        .mean()
+    )
+    # import pdb;pdb.set_trace()
+    score = pd.to_numeric(score, errors='coerce').fillna(0, downcast='infer')
+    best_pin = score.idxmax()
+
+    pin_df = df.xs(best_pin, level="servo pin")
+    pin_df = pin_df[pin_df[target].abs() > thresh]
+
+    stim = pin_df.index.to_numpy(dtype=float)
+    curl = pin_df[target].to_numpy()
+
+    stim_norm = (stim - stim.min()) / (stim.max() - stim.min()) * 100
+
+    mapper = lambda u: np.interp(np.clip(u, 0, 100), curl.tolist(), stim_norm.tolist())
+
+    return best_pin, mapper
+
+
+def compute_pin_heatmap(
+    df,
+    columns=None,
+    threshold=0.00,
+    agg="mean",
+):
+    """
+    Compute pin × signal heatmap values.
+
+    df: MultiIndex DataFrame (servo pin, stim_level)
+    columns: list of columns to score (default = all curl columns)
+    threshold: dead-zone cutoff
+    agg: 'mean' | 'max' | 'sum'
+    """
+
+    if columns is None:
+        columns = [c for c in df.columns]# if "CURL" in c]
+
+    # Remove dead zones
+    active = df[columns].where(df[columns].abs() > threshold)
+
+    # Aggregate over stim_level
+    grouped = active.groupby(level="servo pin")
+
+    if agg == "mean":
+        heatmap = grouped.mean()
+    elif agg == "max":
+        heatmap = grouped.max()
+    elif agg == "sum":
+        heatmap = grouped.sum()
+    else:
+        raise ValueError("agg must be 'mean', 'max', or 'sum'")
+
+    return heatmap
+
+
+def plot_pin_heatmap(
+    heatmap_df,
+    title="Pin vs Output Heatmap",
+    cmap="viridis",
+    annotate=True,
+):
+    plt.figure(figsize=(8, 4))
+    sns.heatmap(
+        heatmap_df,
+        cmap=cmap,
+        annot=annotate,
+        fmt=".3f",
+        linewidths=0.5,
+    )
+    sns.heatmap(heatmap_df, cmap ='RdYlGn', linewidths = 0.30, annot = True)
+    plt.title(title)
+    plt.ylabel("Servo Pin")
+    plt.xlabel("Output")
+    plt.tight_layout()
+    plt.show()
+
+def plot_mappings(df_raw,controller_df,curls):
+    x = np.arange(0,1,0.01)
+    fig, axes = plt.subplots(len(curls),2,figsize=(12,2*len(curls)))
+    fig_curls = []
+    for curl in curls:
+        fig_curls.append(curl)
+        fig_curls.append(curl)
+    for curl,counter in zip(fig_curls,range(1,(len(fig_curls))+1)):
+        if counter%2==1:
+            y = np.empty(0)
+            for i in x:
+                y = np.append(y,controller_df['mapper'][curl](i))
+            ax = axes[(counter//2)-1,0]
+            ax.plot(x,y)
+            ax.set_title(f'{str(curl)} linearized')
+            ax.set_xlabel('input hand curl')
+            ax.set_ylabel('output motor intensity')
+        else:
+            plot_stims = df_raw[curl][controller_df['best_pin'][curl]].index.to_numpy(dtype=float)
+            plot_curls = df_raw[curl][controller_df['best_pin'][curl]].to_numpy(dtype=float)
+            # plot not linearized response
+            ax = axes[(counter//2)-1,1]
+            ax.plot(plot_stims,plot_curls)
+            ax.set_title(f'{str(curl)} NON-linearized')
+            ax.set_xlabel('input hand curl')
+            ax.set_ylabel('output motor intensity')
+    fig.tight_layout()
+
 def shock_mapper(val:int, low_shock:int= 20, max_shock:int= 45,val_offset:int=0) -> int:
     val += val_offset
     intensity = (val / 100) * (max_shock - low_shock) + low_shock
@@ -263,11 +381,12 @@ if __name__ == '__main__':
     stim_levels = range(starting_stim,max_stim+1)
 
     servo_pin_list = [2,4,6,8,10,12] # pins to calibrate back curl with
+    curls = ["IMCURL", "RPCURL", "TCURL","IM", "RP", "T"]
     multindex = pd.MultiIndex.from_product([servo_pin_list, stim_levels ], names=["servo pin", "stim_level"])
     col_names = ['IM','RP','T','IMCURL','RPCURL','TCURL']
     df = pd.DataFrame(index=multindex, columns=col_names)
     # df['IM'][2][35] indexing example
-    
+
     starting_stim,max_stim = shock_calibration()
     while calibrating:
         print('starting automatic calibration curl fingers to ~90 degrees and relax')
@@ -279,7 +398,12 @@ if __name__ == '__main__':
                           max_stim=max_stim,
                           return_df=df,
                           max_curl_rate=0.04)
-
+        
+        controller_df = pd.DataFrame(index=curls,columns=['best_pin','mapper'])
+        for curl in curls:
+            controller_df['best_pin'][curl], controller_df['mapper'][curl] = build_curl_controller(filled_df, target=curl)
+        plot_mappings(df_raw=filled_df,controller_df=controller_df,curls=curls)
+        calibrating = False
 
     # #FOR CALCULATION CREATE MULTIINDEX DF WITH PIN,INTENSITY AND COLUMNS OF IM PR T IMCURL RPCURL TCURL
     # # FOR EACH DESIRED TARGET FIND THE PIN THAT BEST ALLIGNS WITH IT
