@@ -3,10 +3,16 @@ name = "tech-studio-project"
 version = "0.1.0"
 description = "tens-based grip feedback using camera-based hand tracking"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "dotenv>=0.9.9",
+    "hand-tracking-sdk>=1.1.0",
+    "matplotlib>=3.10.9",
+    "mediapipe>=0.10.35",
+    "numpy>=2.4.6",
     "pyfirmata2>=2.5.1",
+    "pygame>=2.6.1",
     "pyserial",
+    "seaborn>=0.13.2",
 ]
 

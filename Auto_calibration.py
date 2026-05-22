@@ -31,29 +31,6 @@ Main loop:
 * do test movements and have user confrom comfort
 '''
 
-class linearized_mapper:
-    def __init__(self, raw_data):
-        raw_data = np.asarray(raw_data)
-
-        # Ensure monotonically increasing data
-        raw_data = np.sort(raw_data)
-
-        self.input_scale = np.linspace(0, 100, len(raw_data))
-        self.output_data = raw_data
-
-    def __call__(self, x):
-        x = np.clip(x, 0, 100)
-        return np.interp(x, self.input_scale, self.output_data)
-    
-    # data = np.exp(np.linspace(0, 5, 1000))  # exponential curve
-
-    # mapper = LinearizedMapper(data)
-
-    # mapper(0)     # smallest value
-    # mapper(50)    # middle of stretched range
-    # mapper(100)   # largest value
-
-#FUNCTIONS FOR MAPPING
 def get_client_and_thread():
     global frame_queue
     global client
@@ -121,53 +98,111 @@ def check_hand_curl(target_curl:float = 0.5,
             print('tracking unstable please hold still and get in view of the cameras',end='')
     return None
 
+import pygame
+
+class CalibrationUI:
+    def __init__(self, screen):
+        self.screen = screen
+        self.font = pygame.font.SysFont("Arial", 28)
+        self.message = ""
+    
+    def update(self, msg):
+        self.message = msg
+        self.draw()
+
+    def draw(self):
+        self.screen.fill((30, 30, 30))
+        text_surface = self.font.render(self.message, True, (200, 200, 200))
+        self.screen.blit(text_surface, (50, 100))
+        pygame.display.flip()
+
+def notify(msg):
+    global ui_update
+    if ui_update:
+        ui_update(msg)
+    else:
+        print(msg)
+
+def run_calibration(screen):
+    ui = CalibrationUI(screen)
+
+    def ui_callback(msg):
+        ui.update(msg)
+
+        # Keep window responsive
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+
+    df = create_mapping_df(
+        servo_pins=[1,2,3],
+        starting_stim=0,
+        max_stim=100,
+        return_df=your_df,
+        ui_update=ui_callback
+    )
+
+    return df
+
 def create_mapping_df(servo_pins:list,
                       starting_stim:int,
                       max_stim:int,
                       return_df:pd.DataFrame,
-                      max_curl_rate:float=0.04):
- """Adds the mapping values into the given dataframe, calls hand curl between servo to ensure hand is positioned correctly"""
+                      max_curl_rate:float=0.04,
+                      ui_update=None):
+ """Adds the mapping values into the given dataframe, calls hand curl between servos to ensure hand is positioned correctly"""
  global frame_queue
  breaker = False
  internal_state = 'mapping'
  while internal_state == "mapping":
         for servo_pin in servo_pins:
-            print(f'starting calibration of pin {servo_pin}')
-            previous_curl = None
+            notify(f'starting calibration of pin {servo_pin}')
             if breaker:
                 break
-            for intensity in range(starting_stim,max_stim + 1):
-                msc.set_intensity(intensity,str(servo_pin))
-                time.sleep(0.04)
-                curls = np.array(ht.normalize_curl(ht.finger_curls(frame_queue.get(timeout=0.5))))
-                if previous_curl is None:
+            complete = False
+            while complete == False:
+                previous_curl = None
+                failed = False
+                for intensity in range(starting_stim,max_stim + 1):
+                    msc.set_intensity(intensity,str(servo_pin))
+                    time.sleep(0.04)
+                    curls = np.array(ht.normalize_curl(ht.finger_curls(frame_queue.get(timeout=0.5))))
+                    if previous_curl is None:
+                        previous_curl = curls
+                    curl_rates = abs(curls - np.array(previous_curl))
+                    if np.any(curls < 0.1): # This checks if any finger have uncurled
+                        notify(f'full extenstion detected: continuing, intesity={intensity}, reset hand to neutral position')
+                        time.sleep(2)
+                        msc.set_intensity(0,str(servo_pin))
+                        complete = True
+                        break
                     previous_curl = curls
-                curl_rates = abs(curls - np.array(previous_curl))
-                if np.any(curls < 0.1): # This checks if any finger have uncurled
-                    print(f'full extenstion detected: continuing, intesity={intensity}, reset hand to neutral position')
-                    time.sleep(2)
+                    curl_stable = curl_rates <= max_curl_rate # MAYBE CHANGE THIS IN THE FUTURE
+                    if curl_stable.all():
+                        return_df["IM"][servo_pin][intensity] = curls[0]
+                        return_df["RP"][servo_pin][intensity] = curls[1]
+                        return_df["T"][servo_pin][intensity] = curls[2]
+                        return_df["IMCURL"][servo_pin][intensity] = curl_rates[0]
+                        return_df["RPCURL"][servo_pin][intensity] = curl_rates[1]
+                        return_df["TCURL"][servo_pin][intensity] = curl_rates[2]
+                        
+                    else:
+                        notify('loss of tracking detected: restarting')
+                        notify(curl_rates)
+                        time.sleep(0.5)
+                        # state = 'WAITING'
+                        # breaker = True
+                        msc.set_intensity(0,str(servo_pin))
+                        failed = True
+                        break
+                if not failed:
+                    notify('pin calibration complete')
                     msc.set_intensity(0,str(servo_pin))
-                    break
-                previous_curl = curls
-                curl_stable = curl_rates <= max_curl_rate # MAYBE CHANGE THIS IN THE FUTURE
-                if curl_stable.all():
-                    return_df["IM"][servo_pin][intensity] = curls[0]
-                    return_df["RP"][servo_pin][intensity] = curls[1]
-                    return_df["T"][servo_pin][intensity] = curls[2]
-                    return_df["IMCURL"][servo_pin][intensity] = curl_rates[0]
-                    return_df["RPCURL"][servo_pin][intensity] = curl_rates[1]
-                    return_df["TCURL"][servo_pin][intensity] = curl_rates[2]
-                    
-                else:
-                    print('loss of tracking detected: restarting')
-                    print(curl_rates)
                     time.sleep(1)
-                    # state = 'WAITING'
-                    # breaker = True
-                    msc.set_intensity(0,str(servo_pin))
-                    break
-            check_hand_curl()
-        print('calibration complete')
+                    check_hand_curl()
+                    complete = True
+        notify('calibration complete')
         state = 'finished'
         return return_df
 
@@ -287,6 +322,7 @@ def plot_mappings(df_raw,controller_df,curls):
             ax.set_xlabel('input hand curl')
             ax.set_ylabel('output motor intensity')
     fig.tight_layout()
+    plt.show()
 
 def shock_mapper(val:int, low_shock:int= 20, max_shock:int= 45,val_offset:int=0) -> int:
     val += val_offset
@@ -370,7 +406,7 @@ if __name__ == '__main__':
     #         quit()
     # ---------------- MAIN LOOP ----------------
     TARGET_CURL = 0.55
-    CURL_TOLERANCE = 0.10
+    CURL_TOLERANCE = 0.15
     MAX_CURL_RATE = 0.02 # normalized curl/cycle,  highest allowed response speed for auto calibration response
 
     calibrating = True
@@ -382,12 +418,13 @@ if __name__ == '__main__':
 
     servo_pin_list = [2,4,6,8,10,12] # pins to calibrate back curl with
     curls = ["IMCURL", "RPCURL", "TCURL","IM", "RP", "T"]
+    mapping_curls = ["IM", "RP", "T"]
     multindex = pd.MultiIndex.from_product([servo_pin_list, stim_levels ], names=["servo pin", "stim_level"])
     col_names = ['IM','RP','T','IMCURL','RPCURL','TCURL']
     df = pd.DataFrame(index=multindex, columns=col_names)
     # df['IM'][2][35] indexing example
 
-    starting_stim,max_stim = shock_calibration()
+    starting_stim,max_stim = [10,80]#shock_calibration()
     while calibrating:
         print('starting automatic calibration curl fingers to ~90 degrees and relax')
         # ---------------- CHECK HAND POSITION ----------------
@@ -396,14 +433,21 @@ if __name__ == '__main__':
         filled_df = create_mapping_df(servo_pins=servo_pin_list,
                           starting_stim=starting_stim,
                           max_stim=max_stim,
-                          return_df=df,
-                          max_curl_rate=0.04)
+                          return_df=dsf,
+                          max_curl_rate=0.1)
         
         controller_df = pd.DataFrame(index=curls,columns=['best_pin','mapper'])
-        for curl in curls:
-            controller_df['best_pin'][curl], controller_df['mapper'][curl] = build_curl_controller(filled_df, target=curl)
-        plot_mappings(df_raw=filled_df,controller_df=controller_df,curls=curls)
-        calibrating = False
+        hmap = compute_pin_heatmap(filled_df, agg='sum')
+        hmap = hmap.to_numpy(dtype=float)
+        plt.imshow(hmap)
+        plt.show()
+        # import pdb;pdb.set_trace()
+        # print(filled_df.head())
+        # for current_curl in mapping_curls:
+        #     controller_df['best_pin'][current_curl], controller_df['mapper'][current_curl] = build_curl_controller(filled_df, others=[other_curl for other_curl in mapping_curls if other_curl != current_curl], target=current_curl)
+        # new_raw = filled_df.drop(columns=['IMCURL','RPCURL','TCURL'])
+        # plot_mappings(df_raw=new_raw,controller_df=controller_df,curls=mapping_curls)
+        # calibrating = False
 
     # #FOR CALCULATION CREATE MULTIINDEX DF WITH PIN,INTENSITY AND COLUMNS OF IM PR T IMCURL RPCURL TCURL
     # # FOR EACH DESIRED TARGET FIND THE PIN THAT BEST ALLIGNS WITH IT

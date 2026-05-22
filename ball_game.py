@@ -1,6 +1,13 @@
 import pygame
 import sys
-
+"""
+Changes to be made:
+* Curl will be three values in a tuple, the ball squeeze should represent the three 'fingers'
+* Adding a menu to choose between the ball and arm game with controlls bulit in to the interface. 
+* Potentially add calibration script as a visual part of the ball game.
+* Arm game will be bicep/tricep with cooseable 'weight'
+* Output stimulation in 0-1 values.  
+"""
 # Initialize Pygame
 pygame.init()
 pygame.font.init()
