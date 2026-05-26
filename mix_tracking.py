@@ -87,6 +87,9 @@ pose_options = vision.PoseLandmarkerOptions(
 
 hand_detector = vision.HandLandmarker.create_from_options(hand_options)
 pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
+def rounder(val):
+    return round(val,2)
+
 
 if __name__ == '__main__':
     cap = cv2.VideoCapture(0)
@@ -117,11 +120,11 @@ if __name__ == '__main__':
                     y = int(lm.y * h)
                     cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
 
-            curl_vals = compute_finger_curl(h_landmarks, w, h)
-
+            curl_vals = ht.normalize_curl(compute_finger_curl(h_landmarks, w, h),10,160)
+            curl_vals = list(map(rounder,curl_vals))
             cv2.putText(
                 frame,
-                f"Curl: {(ht.normalize_curl(round(c,1),10,140) for c in curl_vals)}",
+                f"Curls: {curl_vals}",
                 (10, 80),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1.0,
