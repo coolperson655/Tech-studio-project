@@ -50,7 +50,7 @@ def get_client_and_thread():
     try:
         print(f'thread initiated, test frame {ht.normalize_curl(mt.compute_finger_curl(frame_queue.get(timeout=0.5)[0], frame_queue.get(timeout=0.5)[1], frame_queue.get(timeout=0.5)[2]),10,160)}')
     except:
-        time.sleep(1)
+        time.sleep(5)
         try:
             print(f'thread initiated, test frame {ht.normalize_curl(mt.compute_finger_curl(frame_queue.get(timeout=0.5)[0], frame_queue.get(timeout=0.5)[1], frame_queue.get(timeout=0.5)[2]),10,160)}')
         except Exception as exc:
@@ -410,7 +410,7 @@ def frame_producer():
         # Convert to RGB
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Convert to MediaPipe Image
+        # # Convert to MediaPipe Image
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
         # ---- Run detectors ----
@@ -426,7 +426,7 @@ def frame_producer():
                 for lm in hand_landmarks:
                     x = int(lm.x * w)
                     y = int(lm.y * h)
-                    cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
+                    # cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
             payload = [h_landmarks,w,h]
             try:
                 frame_queue.put(payload, block=False)
@@ -435,15 +435,15 @@ def frame_producer():
                 frame_queue.put(payload)
             curl_vals = ht.normalize_curl(mt.compute_finger_curl(h_landmarks, w, h),10,160)
             curl_vals = list(map(mt.rounder,curl_vals))
-            cv2.putText(
-                frame,
-                f"Curls: {curl_vals}",
-                (10, 80),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1.0,
-                (0, 255, 0),
-                2
-            )
+            # cv2.putText(
+            #     frame,
+            #     f"Curls: {curl_vals}",
+            #     (10, 80),
+            #     cv2.FONT_HERSHEY_SIMPLEX,
+            #     1.0,
+            #     (0, 255, 0),
+            #     2
+            # )
 
 
 

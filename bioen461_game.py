@@ -1,6 +1,11 @@
 import pygame
 import sys
 import numpy as np
+import math
+from Functions.Calculation_functions import check_hand_curl
+from Functions.Streaming_functions import get_client_and_thread, get_curls
+# import Functions.Multi_servo_control as msc
+import pandas as pd
 
 # =====================================================================
 # SYSTEM CONFIGURATION & WINDOW SETUP
@@ -38,6 +43,27 @@ BALL_PROFILES = {
     "SPONGE": {"color": (255, 195, 45),  "stiffness": 20.0,  "radius": 0.050, "desc": "Porous, low resistance foam."}
 }
 ball_list = list(BALL_PROFILES.keys())
+
+# =====================================================================
+# Calibration variables
+# =====================================================================
+TARGET_CURL = 0.55
+CURL_TOLERANCE = 0.15
+MAX_CURL_RATE = 0.02 # normalized curl/cycle,  highest allowed response speed for auto calibration response
+
+calibrating = True
+previous_curl = None
+
+max_stim = 50
+starting_stim = 20
+stim_levels = range(starting_stim,max_stim+1)
+
+servo_pin_list = [2,4,6,8,10,12] # pins to calibrate back curl with
+curls = ["IMCURL", "RPCURL", "TCURL","IM", "RP", "T"]
+mapping_curls = ["IM", "RP", "T"]
+multindex = pd.MultiIndex.from_product([servo_pin_list, stim_levels ], names=["servo pin", "stim_level"])
+col_names = ['IM','RP','T','IMCURL','RPCURL','TCURL']
+df = pd.DataFrame(index=multindex, columns=col_names)
 
 # =====================================================================
 # SYSTEM VARIABLES & LOGIC STATE STATES
@@ -173,13 +199,16 @@ def draw_ui_button(surf, rect, text, color, text_color=TEXT_WHITE):
     txt_rect = txt.get_rect(center=(rect[0] + rect[2]/2, rect[1] + rect[3]/2))
     surf.blit(txt, txt_rect)
     return pygame.Rect(rect)
-
+# streamf.get_client_and_thread()
+# hand_curl = {0:None,1:None,2:None}
 # Main Application Lifecycle Execution Loop
 while True:
     screen.fill(SPACE_GRAY)
     mx, my = pygame.mouse.get_pos()
     click = False
     
+    
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             pygame.quit()
@@ -232,6 +261,9 @@ while True:
     # -----------------------------------------------------------------
     elif APP_STATE == "BALL_GAME":
         # Input Controller Map Tracking Handling
+
+        # hand_curl = streamf.get_curls() 
+
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP]:
             hand_curl[active_finger_idx] = min(calibrated_max, hand_curl[active_finger_idx] + 0.02)
@@ -289,7 +321,7 @@ while True:
             
         # Multi-Channel Haptic Pulse Current Output Bar Arrays (Normalized values 0-1)
         screen.blit(font_subtitle.render("MULTI-CHANNEL PULSE FEEDBACK OUTPUT", True, TEXT_WHITE), (60, 420))
-        channels = ["CH1 (Forearm Flexor Thumb):", "CH2 (Forearm Flexor Index):", "CH3 (Forearm Flexor Middle):"]
+        channels = ["CH1 (Forearm Flexor Thumb):", "CH2 (Forearm Flexor Index/Middle):", "CH3 (Forearm Flexor Ring/Pinky):"]
         for i, ch_lbl in enumerate(channels):
             y_offset = 450 + (i * 50)
             screen.blit(font_small.render(f"{ch_lbl} {stims[i]:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, y_offset))
@@ -311,6 +343,11 @@ while True:
                 arc_r = br + 10 + (i * 8)
                 pygame.draw.arc(screen, GLOVE_CYAN, (bx - arc_r, by - arc_r, arc_r * 2, arc_r * 2), 0.2, 2.9, 2)
         screen.blit(font_small.render("SURFACE GRASP MESH DEFORMATION CORE", True, TEXT_MUTED), (bx - 110, by + 180))
+        
+        # Set the servo intensities
+        for stim in stims:
+
+        # msc.set_intensity()
 
     # -----------------------------------------------------------------
     # SCENE ARCHITECTURE: KINETIC KINEMATICS & LOAD WEIGHT INTELLIGENCE
