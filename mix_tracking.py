@@ -5,23 +5,48 @@ import time
 import Hand_tracking as ht
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from queue import Queue
 
-
+cv2.setNumThreads(1)
 # ---------------------------
 # Utility math functions
 # ---------------------------
 
+class EMAFilter:
+    def __init__(self, alpha=0.7):
+        self.alpha = alpha
+        self.value = None
+
+    def update(self, new_value):
+        if new_value is None:
+            return self.value
+
+        if self.value is None:
+            self.value = new_value
+        else:
+            self.value = self.alpha * new_value + (1 - self.alpha) * self.value
+
+        return self.value
+
 def to_vec(lm, w, h):
-    return np.array([lm.x * w, lm.y * h, lm.z * w])
+    return np.array([lm.x * w, lm.y * h, lm.z])
 
 def angle_between(v1, v2):
-    v1 = v1 / np.linalg.norm(v1)
-    v2 = v2 / np.linalg.norm(v2)
-    return np.degrees(np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0)))
+    v1_norm = np.linalg.norm(v1)
+    v2_norm = np.linalg.norm(v2)
+
+    if v1_norm == 0 or v2_norm == 0:
+        return 0.0  # avoid NaNs
+
+    cos_theta = np.dot(v1, v2) / (v1_norm * v2_norm)
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+
+    return np.degrees(np.arccos(cos_theta))
+
 
 def joint_angle(p0, p1, p2):
     v1 = p0 - p1
-    v2 = p2 - p1
+    v2 = p2 - p1  
     return angle_between(v1, v2)
 
 
@@ -37,7 +62,11 @@ finger_map = {
     "thumb": [1, 2, 3, 4]
 }
 
-def compute_finger_curl(hand_landmarks, w, h):
+def compute_finger_curl(hand_landmarks, w, h, min_deg=10, max_deg=160):
+    """
+    Computes curl for each finger and normalizes it to [0, 1] range based on min and max curl angles.
+    Returns a tuple: (index_middle_avg, ring_pinky_avg, thumb)
+    """
     curls = []
 
     for finger in finger_map.keys():
@@ -56,6 +85,7 @@ def compute_finger_curl(hand_landmarks, w, h):
         a2 = angle_between(v2, v3)
 
         curl_deg = a1 + a2
+        curl_deg = np.clip((curl_deg - min_deg) / (max_deg - min_deg), 0.0, 1.0)
         curls.append(curl_deg)
 
     # Same grouping logic you used
@@ -89,6 +119,9 @@ hand_detector = vision.HandLandmarker.create_from_options(hand_options)
 pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 def rounder(val):
     return round(val,2)
+
+left_elbow_filter = EMAFilter(alpha=0.3)
+right_elbow_filter = EMAFilter(alpha=0.3)
 
 
 if __name__ == '__main__':
@@ -149,7 +182,8 @@ if __name__ == '__main__':
 
                 left_elbow_angle = joint_angle(left_shoulder, left_elbow, left_wrist)
                 right_elbow_angle = joint_angle(right_shoulder, right_elbow, right_wrist)
-
+                left_elbow_angle = left_elbow_filter.update(left_elbow_angle)
+                right_elbow_angle = right_elbow_filter.update(right_elbow_angle)
                 # (optional) shoulder angles (torso → shoulder → elbow)
                 # simpler version: horizontal reference
                 def horizontal_ref(p):

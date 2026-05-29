@@ -1,15 +1,20 @@
+import time
+
 import pygame
 import sys
 import numpy as np
 import math
 from Functions.Calculation_functions import check_hand_curl
-from Functions.Streaming_functions import get_client_and_thread, get_curls
-# import Functions.Multi_servo_control as msc
+# from Functions.Streaming_functions import get_client_and_thread, get_curls
+import Functions.Multi_servo_control as msc
 import pandas as pd
+import Calibration_with_cam as calib
+import matplotlib.pyplot as plt
 
 # =====================================================================
 # SYSTEM CONFIGURATION & WINDOW SETUP
 # =====================================================================
+
 pygame.init()
 pygame.font.init()
 
@@ -23,10 +28,13 @@ SPACE_GRAY = (24, 26, 30)
 PANEL_DARK = (36, 40, 48)
 BG_INNER = (16, 18, 22)
 TEXT_WHITE = (245, 245, 245)
+TEXT_BLACK = (15, 15, 15)
 TEXT_MUTED = (140, 145, 155)
 GLOVE_CYAN = (0, 220, 255)
 VOLTAGE_RED = (255, 50, 85)
 INDICATOR_GREEN = (40, 220, 110)
+CALIBRATION_RED = (252, 65, 3)
+CALIBRATION_YELLOW = (252, 219, 3)
 
 # Fonts
 font_title = pygame.font.SysFont("Arial", 22, bold=True)
@@ -49,10 +57,10 @@ ball_list = list(BALL_PROFILES.keys())
 # =====================================================================
 TARGET_CURL = 0.55
 CURL_TOLERANCE = 0.15
-MAX_CURL_RATE = 0.02 # normalized curl/cycle,  highest allowed response speed for auto calibration response
+MAX_CURL_RATE = 0.6 # normalized curl/cycle,  highest allowed response speed for auto calibration response
 
 calibrating = True
-previous_curl = None
+previous_curl = [0.0, 0.0, 0.0]
 
 max_stim = 50
 starting_stim = 20
@@ -64,6 +72,16 @@ mapping_curls = ["IM", "RP", "T"]
 multindex = pd.MultiIndex.from_product([servo_pin_list, stim_levels ], names=["servo pin", "stim_level"])
 col_names = ['IM','RP','T','IMCURL','RPCURL','TCURL']
 df = pd.DataFrame(index=multindex, columns=col_names)
+controller_df = pd.DataFrame(index=curls,columns=['best_pin','mapper'])
+check_color_dict = {'IM_COLOR':['Waiting...',CALIBRATION_RED], 'RP_COLOR': ['Waiting...',CALIBRATION_RED], 'T_COLOR': ['Waiting...',CALIBRATION_RED]}
+
+calibration_state = "idle"
+calibration_pin_index = 0
+calibration_intensity = starting_stim
+calibration_failed = False
+calibration_message = "Ready to begin calibration sequence."
+calibration_prev_curl = None
+servo_pins = servo_pin_list.copy()
 
 # =====================================================================
 # SYSTEM VARIABLES & LOGIC STATE STATES
@@ -202,6 +220,8 @@ def draw_ui_button(surf, rect, text, color, text_color=TEXT_WHITE):
 # streamf.get_client_and_thread()
 # hand_curl = {0:None,1:None,2:None}
 # Main Application Lifecycle Execution Loop
+frame_queue = calib.get_client_and_thread()
+
 while True:
     screen.fill(SPACE_GRAY)
     mx, my = pygame.mouse.get_pos()
@@ -232,17 +252,30 @@ while True:
         screen.blit(subtitle, (WIDTH//2 - subtitle.get_width()//2, 115))
         
         # Grid Navigation Panel Arrays
-        ball_btn = draw_ui_button(screen, (175, 220, 260, 160), "1. DEFORMABLE BALL LAB", PANEL_DARK)
-        arm_btn = draw_ui_button(screen, (515, 220, 260, 160), "2. KINETIC ARM WORKSPACE", PANEL_DARK)
+        ball_btn = draw_ui_button(screen, (50, 220, 260, 160), "1. DEFORMABLE BALL LAB", PANEL_DARK)
+        arm_btn = draw_ui_button(screen, (350, 220, 260, 160), "2. KINETIC ARM WORKSPACE", PANEL_DARK)
+        cali_btn = draw_ui_button(screen, (650, 220, 260, 160), "3. CALIBRATION INTERFACE", PANEL_DARK)
+        calc_btn = draw_ui_button(screen, (50, 320, 160, 160), "4. CALCULATION INTERFACE", PANEL_DARK)
         
         # Interactive Selection Evaluation
+
+        if calc_btn.collidepoint((mx, my)):
+            draw_ui_button(screen, (50, 320, 160, 160), "4. CALCULATION INTERFACE", GLOVE_CYAN, SPACE_GRAY)
+            if click: APP_STATE = "CALCULATING"
+
         if ball_btn.collidepoint((mx, my)):
-            draw_ui_button(screen, (175, 220, 260, 160), "1. DEFORMABLE BALL LAB", GLOVE_CYAN, SPACE_GRAY)
+            draw_ui_button(screen, (50, 220, 260, 160), "1. DEFORMABLE BALL LAB", GLOVE_CYAN, SPACE_GRAY)
             if click: APP_STATE = "BALL_GAME"
             
         if arm_btn.collidepoint((mx, my)):
-            draw_ui_button(screen, (515, 220, 260, 160), "2. KINETIC ARM WORKSPACE", GLOVE_CYAN, SPACE_GRAY)
+            draw_ui_button(screen, (350, 220, 260, 160), "2. KINETIC ARM WORKSPACE", GLOVE_CYAN, SPACE_GRAY)
             if click: APP_STATE = "ARM_GAME"
+
+        if cali_btn.collidepoint((mx, my)):
+            draw_ui_button(screen, (650, 220, 260, 160), "3. CALIBRATION INTERFACE", GLOVE_CYAN, SPACE_GRAY)
+            if click: 
+                APP_STATE = "CHECKING"
+                calibration_pin_index = 0 # set this once so it doesnt change on every loop during calibration
             
         # Global Operational Controls HUD Panel
         pygame.draw.rect(screen, PANEL_DARK, (175, 430, 600, 130), border_radius=8)
@@ -290,11 +323,11 @@ while True:
             current_ball_idx = (current_ball_idx + 1) % len(ball_list)
             hand_curl = [0.0, 0.0, 0.0]
             
-        cal_btn_txt = "Calibration Active" if calibration_mode else "Calibrate Sensors"
-        cal_btn_col = INDICATOR_GREEN if calibration_mode else PANEL_DARK
-        cal_btn = draw_ui_button(screen, (240, 150, 160, 30), cal_btn_txt, cal_btn_col, TEXT_WHITE)
-        if cal_btn.collidepoint((mx, my)) and click:
-            calibration_mode = not calibration_mode
+        # cal_btn_txt = "Calibration Active" if calibration_mode else "Calibrate Sensors"
+        # cal_btn_col = INDICATOR_GREEN if calibration_mode else PANEL_DARK
+        # cal_btn = draw_ui_button(screen, (240, 150, 160, 30), cal_btn_txt, cal_btn_col, TEXT_WHITE)
+        # if cal_btn.collidepoint((mx, my)) and click:
+        #     calibration_mode = not calibration_mode
             
         # Render Multi-Finger Calibration Suite System Window Block
         pygame.draw.rect(screen, BG_INNER, (60, 200, 400, 195), border_radius=6)
@@ -345,7 +378,7 @@ while True:
         screen.blit(font_small.render("SURFACE GRASP MESH DEFORMATION CORE", True, TEXT_MUTED), (bx - 110, by + 180))
         
         # Set the servo intensities
-        for stim in stims:
+        # for stim in stims:
 
         # msc.set_intensity()
 
@@ -430,6 +463,150 @@ while True:
         screen.blit(font_small.render(f"Shoulder Joint: {sh[0]:.2f}, {sh[1]:.2f}", True, TEXT_WHITE), (s_2d[0]+12, s_2d[1]-5))
         screen.blit(font_small.render(f"Elbow Joint: {el[0]:.2f}, {el[1]:.2f}", True, TEXT_WHITE), (e_2d[0]+12, e_2d[1]-5))
         screen.blit(font_small.render(f"End Effector Hand: {w_mock[0]:.2f}, {w_mock[1]:.2f}", True, TEXT_WHITE), (w_2d[0]+12, w_2d[1]-5))
+    elif APP_STATE == "CHECKING":
+        message = font_body.render("Checking sensor data stream for calibration readiness...", True, TEXT_WHITE)
+        try:
+            curls = frame_queue.get(timeout=0.5).curl
+            curl_rates = abs(np.array(curls) - np.array(previous_curl))
+            previous_curl = curls
+            if np.all(curl_rates <= MAX_CURL_RATE):
+                curl_in_range = np.all(np.abs(np.array(curls) - TARGET_CURL) <=CURL_TOLERANCE)
+                for i, color in zip(range(3), check_color_dict.keys()):
+                    curl_diff = curls[i] - TARGET_CURL
+                    if curl_diff <= CURL_TOLERANCE and curl_diff >= -1* CURL_TOLERANCE:
+                        check_color_dict[color][1] = INDICATOR_GREEN
+                        check_color_dict[color][0] = 'HOLD'
+                    elif curl_diff > CURL_TOLERANCE * 2:
+                        check_color_dict[color][1] = CALIBRATION_RED
+                        check_color_dict[color][0] = 'CURL MUCH LESS'
+                    elif curl_diff > CURL_TOLERANCE:
+                        check_color_dict[color][1] = CALIBRATION_YELLOW
+                        check_color_dict[color][0] = 'CURL LESS'
+                    elif curl_diff > -1* CURL_TOLERANCE * 2:
+                        check_color_dict[color][1] = CALIBRATION_RED
+                        check_color_dict[color][0] = 'CURL MUCH MORE'
+                    elif curl_diff > -1* CURL_TOLERANCE:
+                        check_color_dict[color][1] = CALIBRATION_YELLOW
+                        check_color_dict[color][0] = 'CURL MORE'
+                if curl_in_range:
+                    message = font_body.render("Calibration successful! Tracking stable and within target range. Proceeding to calibration interface...", True, TEXT_WHITE)
+                    APP_STATE = "CALIBRATION"
+            else:
+                message = font_body.render("'tracking unstable please hold still and get in view of the camera", True, TEXT_WHITE)
+                check_color_dict = {'IM_COLOR':['Waiting...',CALIBRATION_RED], 'RP_COLOR': ['Waiting...',CALIBRATION_RED], 'T_COLOR': ['Waiting...',CALIBRATION_RED]}
+        except:
+            message = font_body.render("No data stream detected. Please ensure sensors are active and hand is in view.", True, TEXT_WHITE)
+        # Dict keys | [text, color]
+        # IM_COLOR 
+        # RP_COLOR  
+        # T_COLOR
+        screen.blit(message, (60, 100))
+        screen.blit(font_small.render("Target Curl: {:.2f} | Tolerance: ±{:.2f} | Max Rate: {:.2f}".format(TARGET_CURL, CURL_TOLERANCE, MAX_CURL_RATE), True, TEXT_MUTED), (60, 130))
+        screen.blit(font_small.render(f"Curl Rates: {np.max(curl_rates) if 'curl_rates' in locals() else 0.0}, {curls[0] if 'curls' in locals() else 0.0}, {curls[1] if 'curls' in locals() else 0.0}, {curls[2] if 'curls' in locals() else 0.0}", True, TEXT_MUTED), (60, 150))
+        screen.blit(font_small.render("Instructions: Hold each finger steady at the target curl position. Green indicates ready, yellow indicates adjust curl, red indicates out of range.", True, TEXT_MUTED), (60, 170))
+        screen.blit(font_small.render('IM Curl:', True, TEXT_WHITE), (60, 190))
+        screen.blit(font_small.render('RP Curl:', True, TEXT_WHITE), (360, 190))
+        screen.blit(font_small.render('T Curl:', True, TEXT_WHITE), (650, 190))
+        left = draw_ui_button(screen, (50, 220, 260, 160), check_color_dict["IM_COLOR"][0],check_color_dict['IM_COLOR'][1],TEXT_BLACK)
+        middle =draw_ui_button(screen, (350, 220, 260, 160), check_color_dict["RP_COLOR"][0], check_color_dict['RP_COLOR'][1],TEXT_BLACK)
+        right = draw_ui_button(screen, (650, 220, 260, 160), check_color_dict["T_COLOR"][0], check_color_dict['T_COLOR'][1],TEXT_BLACK)
+        time.sleep(0.1) # Small delay to prevent excessive CPU usage during checking loop
+    elif APP_STATE == "CALIBRATION":
+        calibration_state = "running"
+        calibration_intensity = starting_stim
+        calibration_failed = False
+        calibration_message = f"Starting calibration for pin {servo_pins[0]}"
+        calibration_prev_curl = None
+        pygame.draw.rect(screen, PANEL_DARK, (40, 30, 440, 580), border_radius=10)
+        pygame.draw.rect(screen, BG_INNER, (510, 30, 400, 580), border_radius=10)
+        screen.blit(font_title.render("SENSOR CALIBRATION INTERFACE", True, GLOVE_CYAN), (60, 55))
+        screen.blit(font_body.render("Automated servo calibration workflow: keep your hand steady and in view.", True, TEXT_MUTED), (60, 90))
+        screen.blit(font_small.render(calibration_message, True, TEXT_WHITE if not calibration_failed else VOLTAGE_RED), (60, 120))
 
+        start_btn_color = INDICATOR_GREEN if calibration_state == "running" else PANEL_DARK
+        start_btn_label = "Calibration Running" if calibration_state == "running" else "Start Calibration"
+        start_btn = draw_ui_button(screen, (60, 160, 200, 40), start_btn_label, start_btn_color, TEXT_BLACK)
+        if start_btn.collidepoint((mx, my)) and click and calibration_state != "running":
+            calibration_state = "running"
+            calibration_pin_index = 0
+            calibration_intensity = starting_stim
+            calibration_failed = False
+            calibration_message = f"Starting calibration for pin {servo_pins[0]}"
+            calibration_prev_curl = None
+
+        if calibration_state == "running":
+            if calibration_pin_index >= len(servo_pins):
+                calibration_state = "finished"
+                calibration_message = "Calibration complete. All servos mapped."
+            else:
+                current_pin = servo_pins[calibration_pin_index]
+                try:
+                    msc.set_intensity(calibration_intensity, str(current_pin))
+                    curls = frame_queue.get(timeout=0.5).curl
+                    if calibration_prev_curl is None:
+                        calibration_prev_curl = curls
+
+                    curl_rates = abs(np.array(curls) - np.array(calibration_prev_curl))
+                    calibration_prev_curl = curls
+                    if np.any(np.array(curls) < 0.1):
+                        msc.set_intensity(0, str(current_pin))
+                        calibration_message = f"Full extension detected. Advancing from pin {current_pin}."
+                        calibration_intensity = starting_stim
+                        calibration_pin_index += 1
+                        calibration_prev_curl = None
+                        APP_STATE = "CHECKING"
+                    elif np.all(curl_rates <= MAX_CURL_RATE):
+                        df.at[(current_pin, calibration_intensity), "IM"] = curls[0]
+                        df.at[(current_pin, calibration_intensity), "RP"] = curls[1]
+                        df.at[(current_pin, calibration_intensity), "T"] = curls[2]
+                        df.at[(current_pin, calibration_intensity), "IMCURL"] = curl_rates[0]
+                        df.at[(current_pin, calibration_intensity), "RPCURL"] = curl_rates[1]
+                        df.at[(current_pin, calibration_intensity), "TCURL"] = curl_rates[2]
+                        calibration_message = f"Pin {current_pin} mapped at {calibration_intensity}% intensity."
+                        calibration_intensity += 1
+                        time.sleep(0.04) #delay for servo movment and tracking response
+
+                        if calibration_intensity > max_stim:
+                            msc.set_intensity(0, str(current_pin))
+                            calibration_message = f"Pin {current_pin} calibration complete."
+                            calibration_intensity = starting_stim
+                            calibration_pin_index += 1
+                            calibration_prev_curl = None
+                            APP_STATE = "CHECKING"
+                    else:
+                        msc.set_intensity(0, str(current_pin))
+                        calibration_failed = True
+                        calibration_state = "idle"
+                        calibration_message = f"Tracking unstable on pin {current_pin}. Reset and retry."
+                except Exception as exc:
+                    calibration_failed = True
+                    calibration_state = "idle"
+                    calibration_message = f"Calibration paused: {exc}"
+
+        screen.blit(font_small.render(f"Pin {calibration_pin_index + 1} / {len(servo_pins)}", True, TEXT_MUTED), (60, 220))
+        screen.blit(font_small.render(f"Intensity: {calibration_intensity if calibration_state == 'running' else starting_stim}%", True, TEXT_MUTED), (60, 240))
+        progress = int(100 * (calibration_pin_index / len(servo_pins))) if len(servo_pins) else 0
+        pygame.draw.rect(screen, TEXT_MUTED, (60, 270, 360, 16), border_radius=4)
+        pygame.draw.rect(screen, GLOVE_CYAN, (60, 270, int(360 * (progress / 100.0)), 16), border_radius=4)
+        screen.blit(font_small.render(f"Progress: {progress}%", True, TEXT_WHITE), (60, 295))
+        if progress >= 100:
+            screen.blit(font_small.render("Calibration complete!", True, INDICATOR_GREEN), (60, 330))
+            APP_STATE = "MENU"
+            # Optionally display the calibration DataFrame or save it to a file here
+    elif APP_STATE == 'CALCULATING':
+        pygame.draw.rect(screen, PANEL_DARK, (40, 30, 440, 580), border_radius=10)
+        pygame.draw.rect(screen, BG_INNER, (510, 30, 400, 580), border_radius=10)
+        screen.blit(font_body.render("Calculating optimal servo mappings based on calibration data...", True, TEXT_WHITE), (60, 120))
+        hmap = calib.compute_pin_heatmap(df, agg='sum')
+        hmap = hmap.to_numpy(dtype=float)
+        plt.imshow(hmap)
+        plt.show()
+        for current_curl in mapping_curls:
+            controller_df['best_pin'][current_curl], controller_df['mapper'][current_curl] = calib.build_curl_controller(df, others=[other_curl for other_curl in mapping_curls if other_curl != current_curl], target=current_curl)
+        new_raw = df.drop(columns=['IMCURL','RPCURL','TCURL'])
+        calib.plot_mappings(df_raw=new_raw,controller_df=controller_df,curls=mapping_curls)
+        # Placeholder for potential future implementation of servo mapping optimization logic
+        time.sleep(2) # Simulate processing delay
+        APP_STATE = "MENU"
     pygame.display.flip()
     clock.tick(60)

@@ -1,10 +1,9 @@
-from hand_tracking_sdk import HTSClient, HTSClientConfig, JointName, StreamOutput, parse_line
 import time
 import numpy as np
 import math
 import matplotlib.pyplot as plt
 import Hand_tracking as ht
-import Multi_servo_control as msc
+import Functions.Multi_servo_control as msc
 from queue import Queue
 import threading
 import pandas as pd
@@ -19,8 +18,9 @@ import mix_tracking as mt
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import pygame
+from pygame import font
+from dataclasses import dataclass
 
-from collections import defaultdict
 
 '''
 STEP FOR CALIBRATION
@@ -40,22 +40,32 @@ Main loop:
 * do test movements and have user confrom comfort
 '''
 
+@dataclass
+class TrackingResult:
+    frame: any
+    left_elbow: float
+    right_elbow: float
+    curl: tuple
 def get_client_and_thread():
     global frame_queue
     try:
         frame_queue = Queue(maxsize=1)
-        threading.Thread(target=frame_producer, daemon=True).start()
+        # threading.Thread(target=frame_producer, daemon=True).start()
+        threading.Thread(target=tracking_worker, daemon=True).start()
     except Exception as exc:
         raise RuntimeError("Failed to initilize thread") from exc
+    while frame_queue.empty():
+        print('\rwaiting for thread to start and produce frames...',end='')
+        time.sleep(0.5)
     try:
-        print(f'thread initiated, test frame {ht.normalize_curl(mt.compute_finger_curl(frame_queue.get(timeout=0.5)[0], frame_queue.get(timeout=0.5)[1], frame_queue.get(timeout=0.5)[2]),10,160)}')
+        notify(f'thread initiated, test frame {(frame_queue.get(timeout=0.5).curl, frame_queue.get(timeout=0.5).left_elbow, frame_queue.get(timeout=0.5).right_elbo)}')
     except:
         time.sleep(5)
         try:
-            print(f'thread initiated, test frame {ht.normalize_curl(mt.compute_finger_curl(frame_queue.get(timeout=0.5)[0], frame_queue.get(timeout=0.5)[1], frame_queue.get(timeout=0.5)[2]),10,160)}')
+            notify(f'thread initiated, test frame {(frame_queue.get(timeout=0.5).curl, frame_queue.get(timeout=0.5).left_elbow, frame_queue.get(timeout=0.5).right_elbow)}')
         except Exception as exc:
             raise RuntimeError(f'failed to retrieve from queue, available data:{frame_queue.qsize()}') from exc
-
+    return frame_queue
 def check_hand_curl(target_curl:float = 0.5,
                     curl_tolerance:float=0.1,
                     max_curl_rate:float=0.02):
@@ -65,45 +75,53 @@ def check_hand_curl(target_curl:float = 0.5,
     previous_curl = None
     internal_state = 'checking'
     while internal_state == 'checking':
-        curls = ht.normalize_curl(ht.finger_curls(frame_queue.get(timeout=0.5)))
-        if previous_curl is None:
+        try:
+            curls = frame_queue.get(timeout=0.5).curl
+            if previous_curl is None:
+                previous_curl = curls
+                # print('first loop')
+                continue
+            curl_rates = abs(np.array(curls) - np.array(previous_curl))
             previous_curl = curls
-            # print('first loop')
-            continue
-        curl_rates = abs(np.array(curls) - np.array(previous_curl))
-        previous_curl = curls
-        if np.all(curl_rates <= max_curl_rate): # checking if curl is stable
-            previous_curl = curls
-            curl_in_range = np.all(np.abs(np.array(curls) - target_curl) <= curl_tolerance)
-            curl_stable = np.all(curl_rates <= max_curl_rate)
-            if curl_in_range:
-                sys.stdout.write('\x1b[2K') # should delete last line in terminal
-                print('\ngood hand position try and relax and keep your hand there for 1 second')
-                time.sleep(3)
-                curls_check = ht.normalize_curl(ht.finger_curls(frame_queue.get(timeout=0.5)))
-                curl_in_range_check = np.all(np.abs(np.array(curls_check) - target_curl) <= curl_tolerance)
-                if curl_in_range_check:
-                    print('\npostition confirmed continuing to motor calibration')
-                    internal_state = "CALIBRATING"
-                    continue
+            if np.all(curl_rates <= max_curl_rate): # checking if curl is stable
+                previous_curl = curls
+                curl_in_range = np.all(np.abs(np.array(curls) - target_curl) <= curl_tolerance)
+                if curl_in_range:
+                    notify('\x1b[2K') # should delete last line in terminal
+                    notify('\ngood hand position try and relax and keep your hand there for 1 second')
+                    time.sleep(3)
+                    curls_check = frame_queue.get(timeout=0.5).curl
+                    curl_in_range_check = np.all(np.abs(np.array(curls_check) - target_curl) <= curl_tolerance)
+                    if curl_in_range_check:
+                        notify('\npostition confirmed continuing to motor calibration')
+                        internal_state = "CALIBRATING"
+                        continue
 
-            print(end='\r')
-            for i in [0,1,2]:
-                curl_diff = curls[i] - target_curl
-                if curl_diff >= curl_tolerance:
-                    print(f'curl {col_names[i]} LESS ', end='')#curl is {curls[i]}', end='')
-                    break
-                elif curl_diff <= -1 * curl_tolerance:
-                    print(f'curl {col_names[i]} MORE  ', end='')#curl is {curls[i]}', end='')
-                else:
-                    print(f'curl {col_names[i]} HOLD ', end='')#curl is {curls[i]}', end='')
-        else:
-            print(end='\r')
-            print('tracking unstable please hold still and get in view of the cameras',end='')
+                # notify(end='\r')
+                for i in [0,1,2]:
+                    curl_diff = curls[i] - target_curl
+                    if curl_diff >= curl_tolerance:
+                        notify(f'curl {col_names[i]} LESS ')#, end='')#curl is {curls[i]}', end='')
+                        break
+                    elif curl_diff <= -1 * curl_tolerance:
+                        notify(f'curl {col_names[i]} MORE  ')#, end='')#curl is {curls[i]}', end='')
+                    else:
+                        notify(f'curl {col_names[i]} HOLD ')#, end='')#curl is {curls[i]}', end='')
+            else:
+                #notify(end='\r')
+                notify('tracking unstable please hold still and get in view of the cameras')
+        except Exception as exc:            
+           # notify(end='\r')
+            notify('no frame retrieved from queue, make sure the camera is working and hand is in view')
+            time.sleep(0.5)
+            continue
     return None
 
 class CalibrationUI:
     def __init__(self, screen):
+        pygame.init()
+        pygame.display.set_caption("Calibration UI")
+        pygame.font.init()
         self.screen = screen
         self.font = pygame.font.SysFont("Arial", 28)
         self.message = ""
@@ -119,10 +137,10 @@ class CalibrationUI:
         pygame.display.flip()
 
 def notify(msg):
-    global ui_update
-    if ui_update:
-        ui_update(msg)
-    else:
+    global ui
+    try:
+        ui.update(msg)
+    except:
         print(msg)
 
 def run_calibration(screen):
@@ -169,7 +187,7 @@ def create_mapping_df(servo_pins:list,
                 for intensity in range(starting_stim,max_stim + 1):
                     msc.set_intensity(intensity,str(servo_pin))
                     time.sleep(0.04)
-                    curls = ht.normalize_curl(mt.compute_finger_curl(frame_queue.get(timeout=0.5)[0], frame_queue.get(timeout=0.5)[1], frame_queue.get(timeout=0.5)[2]),10,160)
+                    curls = frame_queue.get(timeout=0.5).curl
                     if previous_curl is None:
                         previous_curl = curls
                     curl_rates = abs(curls - np.array(previous_curl))
@@ -399,145 +417,79 @@ pose_options = vision.PoseLandmarkerOptions(
 
 hand_detector = vision.HandLandmarker.create_from_options(hand_options)
 pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
-def frame_producer():
+
+frame_queue = Queue(maxsize=1)  # only keep latest
+tracker_running = True
+
+
+def tracking_worker():
+    global running
+
     cap = cv2.VideoCapture(0)
 
-    while cap.isOpened():
+    while tracker_running:
         success, frame = cap.read()
         if not success:
+            print("\rFailed to capture frame, retrying...",end='')
             continue
+        print('\r frame captured, processing...', end='')
         frame = cv2.flip(frame, 1)
-        # Convert to RGB
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, _ = frame.shape
 
-        # # Convert to MediaPipe Image
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-        # ---- Run detectors ----
+        # ---- detect ----
         hand_result = hand_detector.detect(mp_image)
         pose_result = pose_detector.detect(mp_image)
 
-        h, w, _ = frame.shape
+        # ---- defaults ----
+        left_elbow_angle = None
+        right_elbow_angle = None
+        curl_vals = (None, None, None)
 
-        # ---- Draw Hand Landmarks ----
+        # ---- hand ----
         if hand_result.hand_landmarks:
-            for hand_landmarks in hand_result.hand_landmarks:
-                h_landmarks = hand_landmarks
-                for lm in hand_landmarks:
-                    x = int(lm.x * w)
-                    y = int(lm.y * h)
-                    # cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
-            payload = [h_landmarks,w,h]
-            try:
-                frame_queue.put(payload, block=False)
-            except:
-                frame_queue.get_nowait()
-                frame_queue.put(payload)
-            curl_vals = ht.normalize_curl(mt.compute_finger_curl(h_landmarks, w, h),10,160)
-            curl_vals = list(map(mt.rounder,curl_vals))
-            # cv2.putText(
-            #     frame,
-            #     f"Curls: {curl_vals}",
-            #     (10, 80),
-            #     cv2.FONT_HERSHEY_SIMPLEX,
-            #     1.0,
-            #     (0, 255, 0),
-            #     2
-            # )
+            hand = hand_result.hand_landmarks[0]
+            curl_vals = mt.compute_finger_curl(hand, w, h)
 
-
-
-        # ---- Draw Pose (shoulder + elbow + wrist) ----
+        # ---- pose ----
         if pose_result.pose_landmarks:
-            for person in pose_result.pose_landmarks:
+            person = pose_result.pose_landmarks[0]
 
-            # ---- Extract joints ----
-                left_shoulder = mt.to_vec(person[11], w, h)
-                left_elbow    = mt.to_vec(person[13], w, h)
-                left_wrist    = mt.to_vec(person[15], w, h)
+            left_shoulder = mt.to_vec(person[11], w, h)
+            left_elbow    = mt.to_vec(person[13], w, h)
+            left_wrist    = mt.to_vec(person[15], w, h)
 
-                right_shoulder = mt.to_vec(person[12], w, h)
-                right_elbow    = mt.to_vec(person[14], w, h)
-                right_wrist    = mt.to_vec(person[16], w, h)
+            right_shoulder = mt.to_vec(person[12], w, h)
+            right_elbow    = mt.to_vec(person[14], w, h)
+            right_wrist    = mt.to_vec(person[16], w, h)
 
-                left_elbow_angle = mt.joint_angle(left_shoulder, left_elbow, left_wrist)
-                right_elbow_angle = mt.joint_angle(right_shoulder, right_elbow, right_wrist)
+            left_elbow_angle = mt.joint_angle(left_shoulder, left_elbow, left_wrist)
+            right_elbow_angle = mt.joint_angle(right_shoulder, right_elbow, right_wrist)
 
+        # ---- package result ----
+        result = TrackingResult(
+            frame=frame,
+            left_elbow=left_elbow_angle,
+            right_elbow=right_elbow_angle,
+            curl=curl_vals
+        )
 
-                # simpler version: horizontal reference
-                def horizontal_ref(p):
-                    return p + np.array([1, 0, 0])
+        if not frame_queue.empty():
+            frame_queue.get_nowait()
 
-                # left_shoulder_angle = joint_angle(horizontal_ref(left_shoulder), left_shoulder, left_elbow)
-                # right_shoulder_angle = joint_angle(horizontal_ref(right_shoulder), right_shoulder, right_elbow)
-
-                # ---- Draw joints ----
-                important_points = [11, 12, 13, 14, 15, 16]
-
-                for idx in important_points:
-                    lm = person[idx]
-                    x = int(lm.x * w)
-                    y = int(lm.y * h)
-                    cv2.circle(frame, (x, y), 6, (0, 0, 255), -1)
-
-                # ---- Draw connections ----
-                def draw_line(a, b):
-                    x1, y1 = int(person[a].x * w), int(person[a].y * h)
-                    x2, y2 = int(person[b].x * w), int(person[b].y * h)
-                    cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-
-                draw_line(11, 13)
-                draw_line(13, 15)
-                draw_line(12, 14)
-                draw_line(14, 16)
-
-                # ---- Display angles ----
-                cv2.putText(
-                    frame,
-                    f"L-Elbow: {left_elbow_angle:.1f}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (255, 0, 0),
-                    2
-                )
-
-                cv2.putText(
-                    frame,
-                    f"R-Elbow: {right_elbow_angle:.1f}",
-                    (10, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (255, 0, 0),
-                    2
-                )
-        cv2.imshow("Hands + Pose (Tasks API)",frame)
-
-        if cv2.waitKey(5) & 0xFF == 27:
-            break
+        frame_queue.put(result)
 
     cap.release()
-    cv2.destroyAllWindows()
+
+
 
 if __name__ == '__main__':
-    # ---------------- INITIALIZE CLIENT AND FRAME LOOP ----------------
-    get_client_and_thread()
-    # frame_queue = Queue(maxsize=1)
-    # thread = threading.Thread(target=frame_producer, daemon=True).start()
-    # thread.start()
-    # try:
-    #     print(f'thread initiated, test frame {ht.normalize_curl(ht.finger_curls(frame_queue.get(timeout=0.5)))}')
-    # except:
-    #     time.sleep(1)
-    #     try:
-    #         print(f'thread initiated, test frame {ht.normalize_curl(ht.finger_curls(frame_queue.get(timeout=0.5)))}')
-    #     except:
-    #         print(f'failed to retrieve from que available data:{frame_queue.qsize()}')
-    #         quit()
     # ---------------- MAIN LOOP ----------------
     TARGET_CURL = 0.55
-    CURL_TOLERANCE = 0.15
-    MAX_CURL_RATE = 0.02 # normalized curl/cycle,  highest allowed response speed for auto calibration response
+    CURL_TOLERANCE = 0.2
+    MAX_CURL_RATE = 0.08 # normalized curl/cycle,  highest allowed response speed for auto calibration response
 
     calibrating = True
     previous_curl = None
@@ -555,29 +507,35 @@ if __name__ == '__main__':
     # df['IM'][2][35] indexing example
 
     starting_stim,max_stim = [10,80]#shock_calibration()
+
+
+    # ---------------- INITIALIZE CLIENT AND FRAME LOOP ----------------
+    ui = CalibrationUI(pygame.display.set_mode((1200, 800)))
+    get_client_and_thread()
+
     while calibrating:
-        print('starting automatic calibration curl fingers to ~90 degrees and relax')
+        notify('starting automatic calibration curl fingers to ~90 degrees and relax')
         # ---------------- CHECK HAND POSITION ----------------
         check_hand_curl(TARGET_CURL,CURL_TOLERANCE,MAX_CURL_RATE) # check for hand to be in the correct position
         # ---------------- APPLY STIM AND MONITER ----------------
         filled_df = create_mapping_df(servo_pins=servo_pin_list,
                           starting_stim=starting_stim,
                           max_stim=max_stim,
-                          return_df=dsf,
+                          return_df=df,
                           max_curl_rate=0.1)
         
         controller_df = pd.DataFrame(index=curls,columns=['best_pin','mapper'])
-        hmap = compute_pin_heatmap(filled_df, agg='sum')
-        hmap = hmap.to_numpy(dtype=float)
-        plt.imshow(hmap)
-        plt.show()
-        # import pdb;pdb.set_trace()
-        # print(filled_df.head())
-        # for current_curl in mapping_curls:
-        #     controller_df['best_pin'][current_curl], controller_df['mapper'][current_curl] = build_curl_controller(filled_df, others=[other_curl for other_curl in mapping_curls if other_curl != current_curl], target=current_curl)
-        # new_raw = filled_df.drop(columns=['IMCURL','RPCURL','TCURL'])
-        # plot_mappings(df_raw=new_raw,controller_df=controller_df,curls=mapping_curls)
-        # calibrating = False
+        # hmap = compute_pin_heatmap(filled_df, agg='sum')
+        # hmap = hmap.to_numpy(dtype=float)
+        # plt.imshow(hmap)
+        # plt.show()
+        import pdb;pdb.set_trace()
+        print(filled_df.head())
+        for current_curl in mapping_curls:
+            controller_df['best_pin'][current_curl], controller_df['mapper'][current_curl] = build_curl_controller(filled_df, others=[other_curl for other_curl in mapping_curls if other_curl != current_curl], target=current_curl)
+        new_raw = filled_df.drop(columns=['IMCURL','RPCURL','TCURL'])
+        plot_mappings(df_raw=new_raw,controller_df=controller_df,curls=mapping_curls)
+        calibrating = False
 
     # #FOR CALCULATION CREATE MULTIINDEX DF WITH PIN,INTENSITY AND COLUMNS OF IM PR T IMCURL RPCURL TCURL
     # # FOR EACH DESIRED TARGET FIND THE PIN THAT BEST ALLIGNS WITH IT
