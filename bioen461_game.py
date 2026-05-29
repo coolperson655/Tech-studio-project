@@ -500,16 +500,42 @@ while True:
         # IM_COLOR 
         # RP_COLOR  
         # T_COLOR
+        current_curls = list(curls) if 'curls' in locals() else [0.0, 0.0, 0.0]
+        if current_curls[0] is None:
+            current_curls = [0.0, 0.0, 0.0]
         screen.blit(message, (60, 100))
-        screen.blit(font_small.render("Target Curl: {:.2f} | Tolerance: ±{:.2f} | Max Rate: {:.2f}".format(TARGET_CURL, CURL_TOLERANCE, MAX_CURL_RATE), True, TEXT_MUTED), (60, 130))
-        screen.blit(font_small.render(f"Curl Rates: {np.max(curl_rates) if 'curl_rates' in locals() else 0.0}, {curls[0] if 'curls' in locals() else 0.0}, {curls[1] if 'curls' in locals() else 0.0}, {curls[2] if 'curls' in locals() else 0.0}", True, TEXT_MUTED), (60, 150))
-        screen.blit(font_small.render("Instructions: Hold each finger steady at the target curl position. Green indicates ready, yellow indicates adjust curl, red indicates out of range.", True, TEXT_MUTED), (60, 170))
-        screen.blit(font_small.render('IM Curl:', True, TEXT_WHITE), (60, 190))
-        screen.blit(font_small.render('RP Curl:', True, TEXT_WHITE), (360, 190))
-        screen.blit(font_small.render('T Curl:', True, TEXT_WHITE), (650, 190))
-        left = draw_ui_button(screen, (50, 220, 260, 160), check_color_dict["IM_COLOR"][0],check_color_dict['IM_COLOR'][1],TEXT_BLACK)
-        middle =draw_ui_button(screen, (350, 220, 260, 160), check_color_dict["RP_COLOR"][0], check_color_dict['RP_COLOR'][1],TEXT_BLACK)
-        right = draw_ui_button(screen, (650, 220, 260, 160), check_color_dict["T_COLOR"][0], check_color_dict['T_COLOR'][1],TEXT_BLACK)
+        screen.blit(font_small.render("Target curl target shown by the red marker. Move each finger to the green zone and hold steady.", True, TEXT_MUTED), (60, 130))
+        screen.blit(font_small.render("Target Curl: {:.2f} | Tolerance: ±{:.2f} | Max Rate: {:.2f}".format(TARGET_CURL, CURL_TOLERANCE, MAX_CURL_RATE), True, TEXT_MUTED), (60, 150))
+
+        panel_positions = [(50, 220), (350, 220), (650, 220)]
+        finger_labels = ['IM', 'RP', 'T']
+        for idx, (label, pos) in enumerate(zip(finger_labels, panel_positions)):
+            px, py = pos
+            panel_color = check_color_dict[f"{label}_COLOR"][1]
+            panel_text = check_color_dict[f"{label}_COLOR"][0]
+            pygame.draw.rect(screen, panel_color, (px, py, 260, 160), border_radius=12)
+            pygame.draw.rect(screen, BG_INNER, (px+10, py+10, 240, 140), border_radius=10)
+
+            screen.blit(font_subtitle.render(f"{label} Finger", True, TEXT_WHITE), (px+16, py+16))
+            curl_value = current_curls[idx]
+            text_color = INDICATOR_GREEN if panel_color == INDICATOR_GREEN else TEXT_WHITE
+            screen.blit(font_small.render(f"Current: {curl_value}", True, text_color), (px+16, py+44))
+            screen.blit(font_small.render(f"Target: {TARGET_CURL:.2f}", True, TEXT_MUTED), (px+16, py+64))
+
+            bar_x = px + 16
+            bar_y = py + 94
+            bar_w = 228
+            bar_h = 18
+            pygame.draw.rect(screen, SPACE_GRAY, (bar_x, bar_y, bar_w, bar_h), border_radius=8)
+            fill_width = int(bar_w * np.clip(curl_value, 0.0, 1.0))
+            pygame.draw.rect(screen, GLOVE_CYAN, (bar_x, bar_y, fill_width, bar_h), border_radius=8)
+            target_x = bar_x + int(bar_w * TARGET_CURL)
+            pygame.draw.line(screen, VOLTAGE_RED, (target_x, bar_y-3), (target_x, bar_y+bar_h+3), 4)
+
+            guide = panel_text
+            guide_color = INDICATOR_GREEN if panel_color == INDICATOR_GREEN else (CALIBRATION_YELLOW if panel_color == CALIBRATION_YELLOW else VOLTAGE_RED)
+            screen.blit(font_small.render(guide, True, guide_color), (px+16, py+120))
+
         time.sleep(0.1) # Small delay to prevent excessive CPU usage during checking loop
     elif APP_STATE == "CALIBRATION":
         calibration_state = "running"
@@ -602,8 +628,11 @@ while True:
         plt.imshow(hmap)
         plt.show()
         for current_curl in mapping_curls:
-            controller_df['best_pin'][current_curl], controller_df['mapper'][current_curl] = calib.build_curl_controller(df, others=[other_curl for other_curl in mapping_curls if other_curl != current_curl], target=current_curl)
+            controller_df['best_pin'][current_curl], controller_df['mapper'][current_curl] = calib.build_curl_controller(df, 
+                                                                                                                        others=[other_curl for other_curl in mapping_curls if other_curl != current_curl],
+                                                                                                                        target=current_curl)
         new_raw = df.drop(columns=['IMCURL','RPCURL','TCURL'])
+        print(controller_df)
         calib.plot_mappings(df_raw=new_raw,controller_df=controller_df,curls=mapping_curls)
         # Placeholder for potential future implementation of servo mapping optimization logic
         time.sleep(2) # Simulate processing delay
