@@ -58,11 +58,11 @@ def get_client_and_thread():
         print('\rwaiting for thread to start and produce frames...',end='')
         time.sleep(0.5)
     try:
-        notify(f'thread initiated, test frame {(frame_queue.get(timeout=0.5).curl, frame_queue.get(timeout=0.5).left_elbow, frame_queue.get(timeout=0.5).right_elbo)}')
+        print(f'thread initiated, test frame {(frame_queue.get(timeout=0.5).curl, frame_queue.get(timeout=0.5).left_elbow, frame_queue.get(timeout=0.5).right_elbow)}')
     except:
         time.sleep(5)
         try:
-            notify(f'thread initiated, test frame {(frame_queue.get(timeout=0.5).curl, frame_queue.get(timeout=0.5).left_elbow, frame_queue.get(timeout=0.5).right_elbow)}')
+            print(f'thread initiated, test frame {(frame_queue.get(timeout=0.5).curl, frame_queue.get(timeout=0.5).left_elbow, frame_queue.get(timeout=0.5).right_elbow)}')
         except Exception as exc:
             raise RuntimeError(f'failed to retrieve from queue, available data:{frame_queue.qsize()}') from exc
     return frame_queue
@@ -87,13 +87,13 @@ def check_hand_curl(target_curl:float = 0.5,
                 previous_curl = curls
                 curl_in_range = np.all(np.abs(np.array(curls) - target_curl) <= curl_tolerance)
                 if curl_in_range:
-                    notify('\x1b[2K') # should delete last line in terminal
-                    notify('\ngood hand position try and relax and keep your hand there for 1 second')
+                    #notify('\x1b[2K') # should delete last line in terminal
+                    print('\ngood hand position try and relax and keep your hand there for 1 second')
                     time.sleep(3)
                     curls_check = frame_queue.get(timeout=0.5).curl
                     curl_in_range_check = np.all(np.abs(np.array(curls_check) - target_curl) <= curl_tolerance)
                     if curl_in_range_check:
-                        notify('\npostition confirmed continuing to motor calibration')
+                        print('\npostition confirmed continuing to motor calibration')
                         internal_state = "CALIBRATING"
                         continue
 
@@ -101,18 +101,18 @@ def check_hand_curl(target_curl:float = 0.5,
                 for i in [0,1,2]:
                     curl_diff = curls[i] - target_curl
                     if curl_diff >= curl_tolerance:
-                        notify(f'curl {col_names[i]} LESS ')#, end='')#curl is {curls[i]}', end='')
+                        print(f'curl {col_names[i]} LESS ', end='')#curl is {curls[i]}', end='')
                         break
                     elif curl_diff <= -1 * curl_tolerance:
-                        notify(f'curl {col_names[i]} MORE  ')#, end='')#curl is {curls[i]}', end='')
+                        print(f'curl {col_names[i]} MORE  ', end='')#curl is {curls[i]}', end='')
                     else:
-                        notify(f'curl {col_names[i]} HOLD ')#, end='')#curl is {curls[i]}', end='')
+                        print(f'curl {col_names[i]} HOLD ', end='')#curl is {curls[i]}', end='')
             else:
-                #notify(end='\r')
-                notify('tracking unstable please hold still and get in view of the cameras')
+                print(end='\r')
+                print('tracking unstable please hold still and get in view of the cameras',end='')
         except Exception as exc:            
-           # notify(end='\r')
-            notify('no frame retrieved from queue, make sure the camera is working and hand is in view')
+            print(end='\r')
+            print('\rno frame retrieved from queue, make sure the camera is working and hand is in view')
             time.sleep(0.5)
             continue
     return None
@@ -177,7 +177,7 @@ def create_mapping_df(servo_pins:list,
  internal_state = 'mapping'
  while internal_state == "mapping":
         for servo_pin in servo_pins:
-            notify(f'starting calibration of pin {servo_pin}')
+            print(f'starting calibration of pin {servo_pin}')
             if breaker:
                 break
             complete = False
@@ -187,12 +187,12 @@ def create_mapping_df(servo_pins:list,
                 for intensity in range(starting_stim,max_stim + 1):
                     msc.set_intensity(intensity,str(servo_pin))
                     time.sleep(0.04)
-                    curls = frame_queue.get(timeout=0.5).curl
+                    curls = np.array(frame_queue.get(timeout=0.5).curl)
                     if previous_curl is None:
                         previous_curl = curls
                     curl_rates = abs(curls - np.array(previous_curl))
                     if np.any(curls < 0.1): # This checks if any finger have uncurled
-                        notify(f'full extenstion detected: continuing, intesity={intensity}, reset hand to neutral position')
+                        print(f'full extenstion detected: continuing, intesity={intensity}, reset hand to neutral position')
                         time.sleep(2)
                         msc.set_intensity(0,str(servo_pin))
                         complete = True
@@ -208,8 +208,8 @@ def create_mapping_df(servo_pins:list,
                         return_df["TCURL"][servo_pin][intensity] = curl_rates[2]
                         
                     else:
-                        notify('loss of tracking detected: restarting')
-                        notify(curl_rates)
+                        print('loss of tracking detected: restarting')
+                        print(curl_rates)
                         time.sleep(0.5)
                         # state = 'WAITING'
                         # breaker = True
@@ -217,12 +217,12 @@ def create_mapping_df(servo_pins:list,
                         failed = True
                         break
                 if not failed:
-                    notify('pin calibration complete')
+                    print('pin calibration complete')
                     msc.set_intensity(0,str(servo_pin))
                     time.sleep(1)
                     check_hand_curl()
                     complete = True
-        notify('calibration complete')
+        print('calibration complete')
         state = 'finished'
         return return_df
 
@@ -230,6 +230,8 @@ def create_mapping_df(servo_pins:list,
 def build_curl_controller(df, target="IMCURL", others=("RPCURL", "TCURL"), thresh=0.05):
 
     reactive = df.dropna(subset=[target])
+    if reactive.empty:
+        return np.nan, lambda u: np.nan
 
     score = (
         reactive
@@ -242,14 +244,21 @@ def build_curl_controller(df, target="IMCURL", others=("RPCURL", "TCURL"), thres
         .mean()
     )
     # import pdb;pdb.set_trace()
-    score = pd.to_numeric(score, errors='coerce').fillna(0, downcast='infer')
+    score = pd.to_numeric(score, errors='coerce').fillna(0)
+    if score.empty:
+        return np.nan, lambda u: np.nan
+
     best_pin = score.idxmax()
 
     pin_df = df.xs(best_pin, level="servo pin")
     pin_df = pin_df[pin_df[target].abs() > thresh]
+    if pin_df.empty:
+        return np.nan, lambda u: np.nan
 
     stim = pin_df.index.to_numpy(dtype=float)
     curl = pin_df[target].to_numpy()
+    if stim.size == 0 or curl.size == 0:
+        return np.nan, lambda u: np.nan
 
     stim_norm = (stim - stim.min()) / (stim.max() - stim.min()) * 100
 
@@ -325,17 +334,25 @@ def plot_mappings(df_raw,controller_df,curls):
     for curl,counter in zip(fig_curls,range(1,(len(fig_curls))+1)):
         if counter%2==1:
             y = np.empty(0)
-            for i in x:
-                y = np.append(y,controller_df['mapper'][curl](i))
+            mapper = controller_df['mapper'][curl]
+            if callable(mapper):
+                for i in x:
+                    y = np.append(y, mapper(i))
+            else:
+                y = np.full_like(x, np.nan)
             ax = axes[(counter//2)-1,0]
             ax.plot(x,y)
             ax.set_title(f'{str(curl)} linearized')
             ax.set_xlabel('input hand curl')
             ax.set_ylabel('output motor intensity')
         else:
-            plot_stims = df_raw[curl][controller_df['best_pin'][curl]].index.to_numpy(dtype=float)
-            plot_curls = df_raw[curl][controller_df['best_pin'][curl]].to_numpy(dtype=float)
-            # plot not linearized response
+            best_pin = controller_df['best_pin'][curl]
+            if not np.isnan(best_pin):
+                plot_stims = df_raw[curl][best_pin].index.to_numpy(dtype=float)
+                plot_curls = df_raw[curl][best_pin].to_numpy(dtype=float)
+            else:
+                plot_stims = np.array([])
+                plot_curls = np.array([])
             ax = axes[(counter//2)-1,1]
             ax.plot(plot_stims,plot_curls)
             ax.set_title(f'{str(curl)} NON-linearized')
@@ -510,11 +527,11 @@ if __name__ == '__main__':
 
 
     # ---------------- INITIALIZE CLIENT AND FRAME LOOP ----------------
-    ui = CalibrationUI(pygame.display.set_mode((1200, 800)))
+    # ui = CalibrationUI(pygame.display.set_mode((1200, 800)))
     get_client_and_thread()
 
     while calibrating:
-        notify('starting automatic calibration curl fingers to ~90 degrees and relax')
+        print('starting automatic calibration curl fingers to ~90 degrees and relax')
         # ---------------- CHECK HAND POSITION ----------------
         check_hand_curl(TARGET_CURL,CURL_TOLERANCE,MAX_CURL_RATE) # check for hand to be in the correct position
         # ---------------- APPLY STIM AND MONITER ----------------

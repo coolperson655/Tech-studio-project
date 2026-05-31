@@ -62,11 +62,11 @@ MAX_CURL_RATE = 0.6 # normalized curl/cycle,  highest allowed response speed for
 calibrating = True
 previous_curl = [0.0, 0.0, 0.0]
 
-max_stim = 50
-starting_stim = 20
+max_stim = 100
+starting_stim = 50
 stim_levels = range(starting_stim,max_stim+1)
 
-servo_pin_list = [2,4,6,8,10,12] # pins to calibrate back curl with
+servo_pin_list = [2]#,4,6,8,10,12] # pins to calibrate back curl with
 curls = ["IMCURL", "RPCURL", "TCURL","IM", "RP", "T"]
 mapping_curls = ["IM", "RP", "T"]
 multindex = pd.MultiIndex.from_product([servo_pin_list, stim_levels ], names=["servo pin", "stim_level"])
@@ -356,6 +356,8 @@ while True:
         screen.blit(font_subtitle.render("MULTI-CHANNEL PULSE FEEDBACK OUTPUT", True, TEXT_WHITE), (60, 420))
         channels = ["CH1 (Forearm Flexor Thumb):", "CH2 (Forearm Flexor Index/Middle):", "CH3 (Forearm Flexor Ring/Pinky):"]
         for i, ch_lbl in enumerate(channels):
+            servo_pin = (i+1)*2
+            msc.set_intensity(int(stims[i]*100), servo_pin) # Scale normalized stim to 0-100 for hardware interface
             y_offset = 450 + (i * 50)
             screen.blit(font_small.render(f"{ch_lbl} {stims[i]:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, y_offset))
             pygame.draw.rect(screen, (50, 55, 65), (60, y_offset + 18, 400, 12), border_radius=3)
@@ -466,7 +468,7 @@ while True:
     elif APP_STATE == "CHECKING":
         message = font_body.render("Checking sensor data stream for calibration readiness...", True, TEXT_WHITE)
         try:
-            curls = frame_queue.get(timeout=0.5).curl
+            curls = frame_queue.get_nowait().curl
             curl_rates = abs(np.array(curls) - np.array(previous_curl))
             previous_curl = curls
             if np.all(curl_rates <= MAX_CURL_RATE):
@@ -536,10 +538,9 @@ while True:
             guide_color = INDICATOR_GREEN if panel_color == INDICATOR_GREEN else (CALIBRATION_YELLOW if panel_color == CALIBRATION_YELLOW else VOLTAGE_RED)
             screen.blit(font_small.render(guide, True, guide_color), (px+16, py+120))
 
-        time.sleep(0.1) # Small delay to prevent excessive CPU usage during checking loop
+        # time.sleep(0.1) # Small delay to prevent excessive CPU usage during checking loop
     elif APP_STATE == "CALIBRATION":
         calibration_state = "running"
-        calibration_intensity = starting_stim
         calibration_failed = False
         calibration_message = f"Starting calibration for pin {servo_pins[0]}"
         calibration_prev_curl = None
@@ -552,13 +553,13 @@ while True:
         start_btn_color = INDICATOR_GREEN if calibration_state == "running" else PANEL_DARK
         start_btn_label = "Calibration Running" if calibration_state == "running" else "Start Calibration"
         start_btn = draw_ui_button(screen, (60, 160, 200, 40), start_btn_label, start_btn_color, TEXT_BLACK)
-        if start_btn.collidepoint((mx, my)) and click and calibration_state != "running":
-            calibration_state = "running"
-            calibration_pin_index = 0
-            calibration_intensity = starting_stim
-            calibration_failed = False
-            calibration_message = f"Starting calibration for pin {servo_pins[0]}"
-            calibration_prev_curl = None
+        # if start_btn.collidepoint((mx, my)) and click and calibration_state != "running":
+        #     calibration_state = "running"
+        #     calibration_pin_index = 0
+        #     calibration_intensity = starting_stim
+        #     calibration_failed = False
+        #     calibration_message = f"Starting calibration for pin {servo_pins[0]}"
+        #     calibration_prev_curl = None
 
         if calibration_state == "running":
             if calibration_pin_index >= len(servo_pins):
@@ -574,12 +575,13 @@ while True:
 
                     curl_rates = abs(np.array(curls) - np.array(calibration_prev_curl))
                     calibration_prev_curl = curls
-                    if np.any(np.array(curls) < 0.1):
+                    if np.any(np.array(curls) < 0.05):
                         msc.set_intensity(0, str(current_pin))
                         calibration_message = f"Full extension detected. Advancing from pin {current_pin}."
                         calibration_intensity = starting_stim
                         calibration_pin_index += 1
                         calibration_prev_curl = None
+                        time.sleep(1)
                         APP_STATE = "CHECKING"
                     elif np.all(curl_rates <= MAX_CURL_RATE):
                         df.at[(current_pin, calibration_intensity), "IM"] = curls[0]
@@ -625,12 +627,15 @@ while True:
         screen.blit(font_body.render("Calculating optimal servo mappings based on calibration data...", True, TEXT_WHITE), (60, 120))
         hmap = calib.compute_pin_heatmap(df, agg='sum')
         hmap = hmap.to_numpy(dtype=float)
+        print(df[['IM','RP','T']].dropna(how='all').head())
         plt.imshow(hmap)
         plt.show()
         for current_curl in mapping_curls:
-            controller_df['best_pin'][current_curl], controller_df['mapper'][current_curl] = calib.build_curl_controller(df, 
-                                                                                                                        others=[other_curl for other_curl in mapping_curls if other_curl != current_curl],
-                                                                                                                        target=current_curl)
+            best_pin, mapper = calib.build_curl_controller(df, 
+                                                           others=[other_curl for other_curl in mapping_curls if other_curl != current_curl],
+                                                           target=current_curl)
+            controller_df.at[current_curl, 'best_pin'] = best_pin
+            controller_df.at[current_curl, 'mapper'] = mapper
         new_raw = df.drop(columns=['IMCURL','RPCURL','TCURL'])
         print(controller_df)
         calib.plot_mappings(df_raw=new_raw,controller_df=controller_df,curls=mapping_curls)
