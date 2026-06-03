@@ -1,4 +1,5 @@
 import time
+from queue import Empty
 
 import pygame
 import sys
@@ -10,6 +11,8 @@ import Functions.Multi_servo_control as msc
 import pandas as pd
 import Calibration_with_cam as calib
 import matplotlib.pyplot as plt
+
+from mix_tracking import EMAFilter
 
 # =====================================================================
 # SYSTEM CONFIGURATION & WINDOW SETUP
@@ -62,7 +65,7 @@ MAX_CURL_RATE = 0.6 # normalized curl/cycle,  highest allowed response speed for
 calibrating = True
 previous_curl = [0.0, 0.0, 0.0]
 
-max_stim = 100
+max_stim = 180
 starting_stim = 50
 stim_levels = range(starting_stim,max_stim+1)
 
@@ -106,6 +109,15 @@ arm_velocity = 0.0
 arm_acceleration = 0.0
 arm_moving_up = True
 time_accumulator = 0.0 # Operates kinematic sine motion loops
+previous_arm_angle = None
+previous_arm_velocity = 0.0
+frame_time = 0.0  # Tracks timing for velocity/acceleration calculations
+smoothed_bicep_intensity = 0
+smoothed_tricep_intensity = 0
+smoothed_shock = 0.0
+tracking_status = "waiting"
+# left_elbow_filter = EMAFilter(alpha=0.3)
+# right_elbow_filter = EMAFilter(alpha=0.3)
 
 # =====================================================================
 # CORE ALGEBRAIC MATH KERNELS (Combined Architecture)
@@ -208,6 +220,12 @@ def calculate_haptic_feedback(mode, **kwargs):
                 
         return bicep if bicep > 0.05 else 0.0, tricep if tricep > 0.05 else 0.0
 
+def arm_angle2motor(degrees, min_deg=30, max_deg=150):
+    return_list = []
+    for degree in degrees:
+        output = 2 * ((degree - min_deg))/ (max_deg - min_deg) -1
+        return_list.append(output)
+    return return_list
 # =====================================================================
 # GRAPHICS INTERFACE RENDER LOOPS
 # =====================================================================
@@ -407,20 +425,92 @@ while True:
             pct = np.clip((mx - 60) / 360.0, 0.0, 1.0)
             chosen_weight_lbs = 1.0 + (pct * 29.0)
             
-        # Kinematic Motion Acceleration Simulation Data Loop Generator
-        time_accumulator += 0.04
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP] or keys[pygame.K_DOWN]:
-            # Simulate real arm swinging: derived displacement maps
-            arm_velocity = math.sin(time_accumulator) * 1.5
-            arm_acceleration = abs(math.cos(time_accumulator) * 3.5)
-        else:
+        # Derive velocity and acceleration from actual arm tracking data
+        arm_velocity = 0.0
+        arm_acceleration = 0.0
+        
+        try:
+            current_arm_angle = frame_queue.get_nowait().left_elbow
+            frame_delta = 0.016  # Approximate 60 FPS frame time
+            
+            if previous_arm_angle is not None:
+                # Calculate velocity as change in angle per frame (degrees/frame)
+                arm_velocity = (current_arm_angle - previous_arm_angle) / frame_delta
+                
+                # Calculate acceleration as change in velocity per frame
+                current_velocity = arm_velocity
+                arm_acceleration = (current_velocity - previous_arm_velocity) / frame_delta
+            
+            previous_arm_angle = current_arm_angle
+            previous_arm_velocity = arm_velocity
+        except:
+            # No tracking available, set kinematics to zero
             arm_velocity = 0.0
             arm_acceleration = 0.0
             
         # Core Feedback Matrix Execution Run (Outputs scaled normalized 0-1)
-        bicep_val, tricep_val = calculate_haptic_feedback("ARM", weight_lbs=chosen_weight_lbs, velocity=arm_velocity, acceleration=arm_acceleration)
+        # bicep_val, tricep_val = calculate_haptic_feedback("ARM", weight_lbs=chosen_weight_lbs, velocity=arm_velocity, acceleration=arm_acceleration)
         
+        # Single queue read for current arm tracking frame, avoid double get_nowait() calls
+        # current_arm_angle = None
+        # tracking_status = "no frame"
+        try:
+            # frame_data = frame_queue.get_nowait()
+            # current_arm_angle = frame_data.left_elbow
+            tracking_status = "tracking" if current_arm_angle is not None else "no angle"
+        except Empty:
+            tracking_status = "queue empty"
+        except Exception as exc:
+            tracking_status = f"error {type(exc).__name__}"
+
+        if current_arm_angle is not None:
+            shock = arm_angle2motor([current_arm_angle])[0]
+        else:
+            shock = 0.0
+
+        # Smooth the shock value to prevent large jumps
+        smooth_alpha = 0.8
+        smoothed_shock = (smoothed_shock * (1.0 - smooth_alpha)) + (shock * smooth_alpha)
+        shock_value = np.clip(smoothed_shock, -1.0, 1.0)
+
+        # Combine arm angle with weight-based haptic feedback
+        # combined_bicep = bicep_val if shock_value > 0 else 0.0
+        # combined_tricep = tricep_val if shock_value < 0 else 0.0
+        combined_bicep = shock_value * chosen_weight_lbs / 30.0 if shock_value > 0 else 0.0
+        combined_tricep = (-shock_value) * chosen_weight_lbs / 30.0 if shock_value < 0 else 0.0
+
+        # Scale by absolute arm angle magnitude for smooth control
+        arm_magnitude = math.log(abs(shock_value),1000) + 1
+        target_bicep = int(combined_bicep * arm_magnitude * 100)
+        target_tricep = int(combined_tricep * arm_magnitude * 100)
+        # target_bicep = math.log(target_bicep,80) + 1
+        # target_tricep = math.log(target_tricep,80) + 1
+
+        # Smooth motor outputs to avoid sudden jumps
+        smoothing_alpha = 0.22
+        smoothed_bicep_intensity = int((smoothed_bicep_intensity * (1.0 - smoothing_alpha)) + (target_bicep * smoothing_alpha))
+        smoothed_tricep_intensity = int((smoothed_tricep_intensity * (1.0 - smoothing_alpha)) + (target_tricep * smoothing_alpha))
+
+        smoothed_bicep_intensity = np.clip(smoothed_bicep_intensity, 0, 180)
+        smoothed_tricep_intensity = np.clip(smoothed_tricep_intensity, 0, 180)
+        
+        msc.set_servo(smoothed_bicep_intensity, 4)
+        msc.set_servo(smoothed_tricep_intensity, 2)
+
+        # Debug overlay for arm tracking state and motor outputs
+        debug_lines = [
+            f"Track: {tracking_status}",
+            f"Arm angle: {current_arm_angle if current_arm_angle is not None else 'N/A'}",
+            f"Raw shock: {shock:.2f}",
+            f"Smoothed shock: {shock_value:.2f}",
+            f"Bicep: {smoothed_bicep_intensity}",
+            f"Tricep: {smoothed_tricep_intensity}"
+        ]
+        debug_y = 520
+        for line in debug_lines:
+            screen.blit(font_small.render(line, True, VOLTAGE_RED if "error" in tracking_status or tracking_status == "no angle" else INDICATOR_GREEN), (60, debug_y))
+            debug_y += 18
+
         # Kinematic Telemetry Analytics Data Logging
         screen.blit(font_subtitle.render("REAL-TIME ARM KINEMATICS MATRIX", True, TEXT_WHITE), (60, 230))
         screen.blit(font_body.render(f"Arm Center Speed Vector: {arm_velocity:.2f} m/s", True, TEXT_WHITE), (75, 265))
@@ -429,13 +519,13 @@ while True:
         # Dynamic Multi-Channel Wearable Upper Node Stimulation Bars (Normalized 0-1 outputs)
         screen.blit(font_subtitle.render("SLEEVE UPPER NODE ESTIMATED OUTPUTS", True, TEXT_WHITE), (60, 360))
         
-        screen.blit(font_small.render(f"CH4 (Upper Bicep Target Array): {bicep_val:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, 400))
+        screen.blit(font_small.render(f"CH4 (Upper Bicep Target Array): {combined_bicep:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, 400))
         pygame.draw.rect(screen, BG_INNER, (60, 420, 360, 12), border_radius=3)
-        pygame.draw.rect(screen, VOLTAGE_RED, (60, 420, int(360 * bicep_val), 12), border_radius=3)
+        pygame.draw.rect(screen, VOLTAGE_RED, (60, 420, int(360 * combined_bicep), 12), border_radius=3)
         
-        screen.blit(font_small.render(f"CH5 (Upper Tricep Stabilizer Array): {tricep_val:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, 460))
+        screen.blit(font_small.render(f"CH5 (Upper Tricep Stabilizer Array): {combined_tricep:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, 460))
         pygame.draw.rect(screen, BG_INNER, (60, 480, 360, 12), border_radius=3)
-        pygame.draw.rect(screen, VOLTAGE_RED, (60, 480, int(360 * tricep_val), 12), border_radius=3)
+        pygame.draw.rect(screen, VOLTAGE_RED, (60, 480, int(360 * combined_tricep), 12), border_radius=3)
 
         # Right Side Coordinate Visualization Render Pipeline Window
         # Simulate tracking system reference origins mapping
@@ -568,7 +658,7 @@ while True:
             else:
                 current_pin = servo_pins[calibration_pin_index]
                 try:
-                    msc.set_intensity(calibration_intensity, str(current_pin))
+                    msc.set_servo(calibration_intensity, current_pin)
                     curls = frame_queue.get(timeout=0.5).curl
                     if calibration_prev_curl is None:
                         calibration_prev_curl = curls
@@ -576,7 +666,7 @@ while True:
                     curl_rates = abs(np.array(curls) - np.array(calibration_prev_curl))
                     calibration_prev_curl = curls
                     if np.any(np.array(curls) < 0.05):
-                        msc.set_intensity(0, str(current_pin))
+                        msc.set_servo(0, current_pin)
                         calibration_message = f"Full extension detected. Advancing from pin {current_pin}."
                         calibration_intensity = starting_stim
                         calibration_pin_index += 1
@@ -595,14 +685,14 @@ while True:
                         time.sleep(0.04) #delay for servo movment and tracking response
 
                         if calibration_intensity > max_stim:
-                            msc.set_intensity(0, str(current_pin))
+                            msc.set_servo(0, current_pin)
                             calibration_message = f"Pin {current_pin} calibration complete."
                             calibration_intensity = starting_stim
                             calibration_pin_index += 1
                             calibration_prev_curl = None
                             APP_STATE = "CHECKING"
                     else:
-                        msc.set_intensity(0, str(current_pin))
+                        msc.set_servo(0, current_pin)
                         calibration_failed = True
                         calibration_state = "idle"
                         calibration_message = f"Tracking unstable on pin {current_pin}. Reset and retry."
