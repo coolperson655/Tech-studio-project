@@ -40,7 +40,7 @@ try:
     PINS:dict[int, Pin] = {i : BOARD.get_pin(servo_d_pin_str(i)) for i in range(2, 14, 2)}  # claim pins [2,4,6,8,10,12]
 
     # not sure if you're using this still
-    SERVO_RANGE:list[int] = [0, 180]  # actual mechanical limits of servo range when attached to tens
+    SERVO_RANGE:list[int] = [0, 360]  # actual mechanical limits of servo range when attached to tens
 
 except AttributeError as e:
     raise RuntimeError("Tens Arduino appears to be unplugged.")
@@ -62,25 +62,24 @@ def main():
             # pin_num = input('pin num:')
             if vstr == '': v = 0
             else: v = int(vstr)
-            pin_num = int(input('pin num:'))
+            # pin_num = int(input('pin num:'))
     
-            set_intensity(v, 2)  
-            set_intensity(v, 4)  
-            set_intensity(v, 6)  
-            set_intensity(v, 8)  
-            set_intensity(v, 10)  
-            set_intensity(v, 12)
-            # set_servo(v,2)
-            # set_servo(v,4)
-            # set_servo(v,6)
-            # set_servo(v,8)
-            # set_servo(v,10)
-            # set_servo(v,12)
-            # set_intensity(v, pin_num)
+            # set_intensity(v, 2)  
+            # set_intensity(v, 4)  
+            # set_intensity(v, 6)  
+            # set_intensity(v, 8)  
+            # set_intensity(v, 10)  
+            # set_intensity(v, 12)
+            set_servo(v,2)
+            set_servo(v,4)
+            set_servo(v,6)
+            set_servo(v,8)
+            set_servo(v,10)
+            set_servo(v,12)
 
             # loop to test
-            sleep_amt:float = 0.2
-            v=0
+            # sleep_amt:float = 0.5
+            # v=0
 
             # while 1:
             #     for i in range(2,14,2):

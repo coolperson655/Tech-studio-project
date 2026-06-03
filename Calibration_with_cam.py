@@ -22,6 +22,7 @@ from pygame import font
 from dataclasses import dataclass
 
 
+
 '''
 STEP FOR CALIBRATION
 
@@ -440,8 +441,8 @@ tracker_running = True
 
 
 def tracking_worker():
-    global running
-
+    global left_elbow_filter
+    global right_elbow_filter
     cap = cv2.VideoCapture(0)
 
     while tracker_running:
@@ -484,7 +485,7 @@ def tracking_worker():
 
             left_elbow_angle = mt.joint_angle(left_shoulder, left_elbow, left_wrist)
             right_elbow_angle = mt.joint_angle(right_shoulder, right_elbow, right_wrist)
-
+            left_elbow_angle = left_elbow_filter.update(left_elbow_angle)
         # ---- package result ----
         result = TrackingResult(
             frame=frame,
@@ -501,9 +502,13 @@ def tracking_worker():
     cap.release()
 
 
+left_elbow_filter = mt.EMAFilter(alpha=0.3)
+right_elbow_filter = mt.EMAFilter(alpha=0.3)
 
 if __name__ == '__main__':
     # ---------------- MAIN LOOP ----------------
+    left_elbow_filter = mt.EMAFilter(alpha=0.3)
+    right_elbow_filter = mt.EMAFilter(alpha=0.3)
     TARGET_CURL = 0.55
     CURL_TOLERANCE = 0.2
     MAX_CURL_RATE = 0.08 # normalized curl/cycle,  highest allowed response speed for auto calibration response
