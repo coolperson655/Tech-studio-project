@@ -293,15 +293,16 @@ while True:
     # SCENE ARCHITECTURE: BALL SQUEEZE ENGINE & CALIBRATION INTERFACE
     # -----------------------------------------------------------------
     elif APP_STATE == "BALL_GAME":
-        # Input Controller Map Tracking Handling
-
-        # hand_curl = streamf.get_curls() 
-
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP]:
-            hand_curl[active_finger_idx] = min(calibrated_max, hand_curl[active_finger_idx] + 0.02)
-        if keys[pygame.K_DOWN]:
-            hand_curl[active_finger_idx] = max(calibrated_min, hand_curl[active_finger_idx] - 0.02)
+        # Extract live hand tracking curl data directly from the streaming data queue
+        try:
+            # Non-blocking fetch to keep Pygame's render loop fluid
+            hand_curl = list(frame_queue.get_nowait().curl)
+            # Guarantee data structure consistency for the 3 tracking nodes
+            if len(hand_curl) < 3:
+                hand_curl += [0.0] * (3 - len(hand_curl))
+        except Exception:
+            # Maintain last known data coordinate position if stream is temporarily dry
+            pass
             
         # Core Math Evaluation Run
         active_ball = ball_list[current_ball_idx]
@@ -323,28 +324,21 @@ while True:
             current_ball_idx = (current_ball_idx + 1) % len(ball_list)
             hand_curl = [0.0, 0.0, 0.0]
             
-        # cal_btn_txt = "Calibration Active" if calibration_mode else "Calibrate Sensors"
-        # cal_btn_col = INDICATOR_GREEN if calibration_mode else PANEL_DARK
-        # cal_btn = draw_ui_button(screen, (240, 150, 160, 30), cal_btn_txt, cal_btn_col, TEXT_WHITE)
-        # if cal_btn.collidepoint((mx, my)) and click:
-        #     calibration_mode = not calibration_mode
-            
         # Render Multi-Finger Calibration Suite System Window Block
         pygame.draw.rect(screen, BG_INNER, (60, 200, 400, 195), border_radius=6)
         screen.blit(font_subtitle.render("INTEGRATED SLEEVE SENSOR CALIBRATION MATRIX", True, TEXT_WHITE), (75, 215))
         
+        # Pull down fingers list
         fingers_list = ["1. THUMB", "2. INDEX", "3. MIDDLE"]
         for i, f_name in enumerate(fingers_list):
             y_offset = 255 + (i * 45)
-            # Accent color highlighting current calibrated selector focus channel tracking array
             text_color = GLOVE_CYAN if i == active_finger_idx else TEXT_WHITE
             screen.blit(font_body.render(f_name, True, text_color), (75, y_offset))
             
-            # Draw tracking bar background track
+            # Draw tracking bar background track matching real telemetry
             pygame.draw.rect(screen, PANEL_DARK, (165, y_offset + 2, 210, 14), border_radius=4)
-            pygame.draw.rect(screen, GLOVE_CYAN, (165, y_offset + 2, int(210 * hand_curl[i]), 14), border_radius=4)
+            pygame.draw.rect(screen, GLOVE_CYAN, (165, y_offset + 2, int(210 * np.clip(hand_curl[i], 0.0, 1.0)), 14), border_radius=4)
             
-            # Handle selection clicks to map tracking system calibration arrays
             f_rect = pygame.Rect(75, y_offset, 300, 20)
             if f_rect.collidepoint((mx, my)) and click:
                 active_finger_idx = i
@@ -352,12 +346,12 @@ while True:
         if calibration_mode:
             screen.blit(font_small.render("CALIBRATION MODE LOCK ACTIVE: Setting tracking clip points.", True, INDICATOR_GREEN), (75, 365))
             
-        # Multi-Channel Haptic Pulse Current Output Bar Arrays (Normalized values 0-1)
+        # Multi-Channel Haptic Pulse Current Output Bar Arrays
         screen.blit(font_subtitle.render("MULTI-CHANNEL PULSE FEEDBACK OUTPUT", True, TEXT_WHITE), (60, 420))
         channels = ["CH1 (Forearm Flexor Thumb):", "CH2 (Forearm Flexor Index/Middle):", "CH3 (Forearm Flexor Ring/Pinky):"]
         for i, ch_lbl in enumerate(channels):
             servo_pin = (i+1)*2
-            msc.set_intensity(int(stims[i]*100), servo_pin) # Scale normalized stim to 0-100 for hardware interface
+            msc.set_intensity(int(stims[i]*100), servo_pin)
             y_offset = 450 + (i * 50)
             screen.blit(font_small.render(f"{ch_lbl} {stims[i]:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, y_offset))
             pygame.draw.rect(screen, (50, 55, 65), (60, y_offset + 18, 400, 12), border_radius=3)
@@ -365,41 +359,44 @@ while True:
 
         # Right Side Visualizer Rendering Canvas Panel Window
         bx, by = 710, 320
-        br = 90
-        # Average deform compression multiplier scalar implementation mapping layout tracking shapes
-        sq_fac = 1.0 - (avg_deform * (1.0 - profile["stiffness"]/800.0) * 0.4)
-        rx = int(br * (1.0 + avg_deform * 0.15))
-        ry = int(br * sq_fac)
+        br = 90  # Base radius of the un-deformed ball
+        
+        # --- DYNAMIC SQUEEZE MULTIPLIER CORE ---
+        # As avg_deform increases, the ball flattens vertically and expands horizontally (conservation of volume)
+        # We scale this effect slightly based on material stiffness so softer objects deform more dramatically
+        deformation_factor = avg_deform * (2.0 - (profile["stiffness"] / 800.0))
+        
+        # Calculate squashed dimensions (clamp to ensure the ball never scales below zero or flips)
+        rx = int(br * (1.0 + max(0.0, deformation_factor * 0.45))) # Widens out to the sides
+        ry = int(br * max(0.1, 1.0 - (deformation_factor * 0.65))) # Flattens down from the top
+        
+        # Render the dynamically squeezing material compound shape
         pygame.draw.ellipse(screen, profile["color"], (bx - rx, by - ry, rx * 2, ry * 2))
         
-        # Virtual Mesh Skeleton Hand Boundary Track Overlays
+        # Virtual Mesh Skeleton Hand Boundary Track Overlays (Clings to the squashed shape)
         for i, curl in enumerate(hand_curl):
             if curl > 0:
-                arc_r = br + 10 + (i * 8)
-                pygame.draw.arc(screen, GLOVE_CYAN, (bx - arc_r, by - arc_r, arc_r * 2, arc_r * 2), 0.2, 2.9, 2)
+                # Dynamically match the track rings to the current compressed boundary radius
+                arc_rx = rx + 10 + (i * 8)
+                arc_ry = ry + 10 + (i * 8)
+                pygame.draw.arc(screen, GLOVE_CYAN, (bx - arc_rx, by - arc_ry, arc_rx * 2, arc_ry * 2), 0.2, 2.9, 2)
+                
         screen.blit(font_small.render("SURFACE GRASP MESH DEFORMATION CORE", True, TEXT_MUTED), (bx - 110, by + 180))
-        
-        # Set the servo intensities
-        # for stim in stims:
-
-        # msc.set_intensity()
 
     # -----------------------------------------------------------------
     # SCENE ARCHITECTURE: KINETIC KINEMATICS & LOAD WEIGHT INTELLIGENCE
     # -----------------------------------------------------------------
     elif APP_STATE == "ARM_GAME":
-        # Interactive Object Weight Controller Slider Array Updates (1 to 30 Pounds Interface Tracking)
+        # Interactive Object Weight Controller Slider Array Updates
         pygame.draw.rect(screen, PANEL_DARK, (40, 30, 440, 580), border_radius=10)
         pygame.draw.rect(screen, BG_INNER, (510, 30, 400, 580), border_radius=10)
         
         screen.blit(font_title.render("KINETIC WEIGHT SELECTION CORE", True, GLOVE_CYAN), (60, 55))
         screen.blit(font_body.render("Simulate mass, inertia loads, and target bicep/tricep arrays.", True, TEXT_MUTED), (60, 90))
         
-        # Weight Load Configuration Slider Widget Render Architecture
         screen.blit(font_subtitle.render(f"Simulated Weight Load Target: {chosen_weight_lbs:.1f} lbs", True, TEXT_WHITE), (60, 140))
         pygame.draw.rect(screen, BG_INNER, (60, 175, 360, 16), border_radius=4)
         
-        # Capture slider movement coordinates logic map loops
         slider_knob_x = int(60 + ((chosen_weight_lbs - 1.0) / 29.0) * 360)
         pygame.draw.circle(screen, GLOVE_CYAN, (slider_knob_x, 183), 10)
         
@@ -407,18 +404,37 @@ while True:
             pct = np.clip((mx - 60) / 360.0, 0.0, 1.0)
             chosen_weight_lbs = 1.0 + (pct * 29.0)
             
-        # Kinematic Motion Acceleration Simulation Data Loop Generator
-        time_accumulator += 0.04
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP] or keys[pygame.K_DOWN]:
-            # Simulate real arm swinging: derived displacement maps
+        # Initialize default tracking mock vectors
+        h_mock = [0.0, 1.65, 0.0]
+        w_mock = [0.25, 1.10, 0.35]
+        
+        # Read the real streaming coordinate position frame data if running
+        try:
+            live_frame = frame_queue.get_nowait()
+            # If the streaming frame contains real 3D tracking coordinates, bind them directly
+            if hasattr(live_frame, 'pose') and live_frame.pose is not None:
+                # Expects structure containing head and hand attributes or indexed point layouts
+                h_mock = list(live_frame.pose[0]) if isinstance(live_frame.pose, tuple) else h_mock
+                w_mock = list(live_frame.pose[1]) if isinstance(live_frame.pose, tuple) else w_mock
+            
+            # Extract tracking-derived kinematics calculation loops 
+            if hasattr(live_frame, 'velocity') and hasattr(live_frame, 'acceleration'):
+                arm_velocity = live_frame.velocity
+                arm_acceleration = live_frame.acceleration
+            else:
+                # Kinematic Fallback calculation logic based on time if raw floats are uncalculated
+                time_accumulator += 0.04
+                arm_velocity = math.sin(time_accumulator) * 1.5
+                arm_acceleration = abs(math.cos(time_accumulator) * 3.5)
+                w_mock[1] += math.sin(time_accumulator) * 0.25
+        except Exception:
+            # Fallback evaluation simulation loop run if data hardware channel is isolated
+            time_accumulator += 0.04
             arm_velocity = math.sin(time_accumulator) * 1.5
             arm_acceleration = abs(math.cos(time_accumulator) * 3.5)
-        else:
-            arm_velocity = 0.0
-            arm_acceleration = 0.0
+            w_mock[1] += math.sin(time_accumulator) * 0.25
             
-        # Core Feedback Matrix Execution Run (Outputs scaled normalized 0-1)
+        # Core Feedback Matrix Execution Run
         bicep_val, tricep_val = calculate_haptic_feedback("ARM", weight_lbs=chosen_weight_lbs, velocity=arm_velocity, acceleration=arm_acceleration)
         
         # Kinematic Telemetry Analytics Data Logging
@@ -426,7 +442,7 @@ while True:
         screen.blit(font_body.render(f"Arm Center Speed Vector: {arm_velocity:.2f} m/s", True, TEXT_WHITE), (75, 265))
         screen.blit(font_body.render(f"Acceleration Inertia Force: {arm_acceleration:.2f} m/s²", True, TEXT_WHITE), (75, 295))
         
-        # Dynamic Multi-Channel Wearable Upper Node Stimulation Bars (Normalized 0-1 outputs)
+        # Dynamic Multi-Channel Wearable Upper Node Stimulation Bars
         screen.blit(font_subtitle.render("SLEEVE UPPER NODE ESTIMATED OUTPUTS", True, TEXT_WHITE), (60, 360))
         
         screen.blit(font_small.render(f"CH4 (Upper Bicep Target Array): {bicep_val:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, 400))
@@ -438,10 +454,6 @@ while True:
         pygame.draw.rect(screen, VOLTAGE_RED, (60, 480, int(360 * tricep_val), 12), border_radius=3)
 
         # Right Side Coordinate Visualization Render Pipeline Window
-        # Simulate tracking system reference origins mapping
-        h_mock = [0.0, 1.65, 0.0]
-        w_mock = [0.25, 1.10 + (math.sin(time_accumulator) * 0.25 if arm_velocity != 0 else 0), 0.35]
-        
         sh, el = estimator.estimate_arm_chain(h_mock, w_mock)
         
         # Projection of 3D skeletal vectors down onto 2D Pygame surface layout coordinates
@@ -453,13 +465,13 @@ while True:
         w_2d = (int(ox + w_mock[0]*scale_f), int(oy + (1.65 - w_mock[1])*scale_f))
         
         # Draw skeleton bone linkages paths
-        pygame.draw.line(screen, TEXT_MUTED, s_2d, e_2d, 5) # Upper Humeral arm tracking link
-        pygame.draw.line(screen, TEXT_MUTED, e_2d, w_2d, 4) # Lower Radial forearm tracking link
+        pygame.draw.line(screen, TEXT_MUTED, s_2d, e_2d, 5)
+        pygame.draw.line(screen, TEXT_MUTED, e_2d, w_2d, 4)
         
         # Joint node markers overlays
-        pygame.draw.circle(screen, INDICATOR_GREEN, s_2d, 8) # Shoulder Joint Node
-        pygame.draw.circle(screen, VOLTAGE_RED, e_2d, 7)      # Estimated Target Elbow Node
-        pygame.draw.circle(screen, GLOVE_CYAN, w_2d, 6)       # Hand End-Effector Tracking Target
+        pygame.draw.circle(screen, INDICATOR_GREEN, s_2d, 8)
+        pygame.draw.circle(screen, VOLTAGE_RED, e_2d, 7)
+        pygame.draw.circle(screen, GLOVE_CYAN, w_2d, 6)
         
         # Graphical labels indicators mapping layout coordinates
         screen.blit(font_small.render(f"Shoulder Joint: {sh[0]:.2f}, {sh[1]:.2f}", True, TEXT_WHITE), (s_2d[0]+12, s_2d[1]-5))
