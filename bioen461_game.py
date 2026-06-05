@@ -75,12 +75,14 @@ mapping_curls = ["IM", "RP", "T"]
 multindex = pd.MultiIndex.from_product([servo_pin_list, stim_levels ], names=["servo pin", "stim_level"])
 col_names = ['IM','RP','T','IMCURL','RPCURL','TCURL']
 df = pd.DataFrame(index=multindex, columns=col_names)
-controller_df = pd.DataFrame(index=curls,columns=['best_pin','mapper'])
+controller_df = pd.DataFrame(index=curls,columns=['best_pin','mapper','max_stim'])
 check_color_dict = {'IM_COLOR':['Waiting...',CALIBRATION_RED], 'RP_COLOR': ['Waiting...',CALIBRATION_RED], 'T_COLOR': ['Waiting...',CALIBRATION_RED]}
 
 calibration_state = "idle"
 calibration_pin_index = 0
 calibration_intensity = starting_stim
+ball_smoothed_pin_intensity = {pin: 0 for pin in servo_pin_list}
+ball_smoothing_alpha = 0.22
 calibration_failed = False
 calibration_message = "Ready to begin calibration sequence."
 calibration_prev_curl = None
@@ -227,6 +229,13 @@ def arm_angle2motor(degrees, min_deg=30, max_deg=150):
         output = 2 * ((degree - min_deg))/ (max_deg - min_deg) -1
         return_list.append(output)
     return return_list
+
+def log_compress_intensity(value, max_value=100.0):
+    """Compress high-end intensity values so servo effect scales more smoothly."""
+    value = np.clip(value, 0.0, max_value)
+    if value <= 0.0:
+        return 0.0
+    return float(np.log1p(value * 9.0) / np.log1p(max_value * 9.0) * max_value)
 # =====================================================================
 # GRAPHICS INTERFACE RENDER LOOPS
 # =====================================================================
@@ -377,13 +386,37 @@ while True:
         # Multi-Channel Haptic Pulse Current Output Bar Arrays
         screen.blit(font_subtitle.render("MULTI-CHANNEL PULSE FEEDBACK OUTPUT", True, TEXT_WHITE), (60, 420))
         channels = ["CH1 (Forearm Flexor Thumb):", "CH2 (Forearm Flexor Index/Middle):", "CH3 (Forearm Flexor Ring/Pinky):"]
+        pin_targets = {pin: 0.0 for pin in servo_pin_list}
+        default_pin_map = {0: 2, 1: 4, 2: 6}
+        finger_keys = ["IM", "RP", "T"]
+        
+        for finger_index, (force_value, finger_name) in enumerate(zip(stims, finger_keys)):
+            force_pct = np.clip(force_value, 0.0, 1.0)
+            best_pin = controller_df.at[finger_name, 'best_pin'] if finger_name in controller_df.index else np.nan
+            mapper = controller_df.at[finger_name, 'mapper'] if finger_name in controller_df.index else None
+            max_stim = controller_df.at[finger_name, 'max_stim'] if finger_name in controller_df.index else 180.0
+
+            if pd.isna(best_pin) or not callable(mapper):
+                best_pin = default_pin_map.get(finger_index, default_pin_map.get(0, 2))
+                max_stim = 180.0
+
+            raw_target = force_pct * 180.0
+            if max_stim is not None and not pd.isna(max_stim):
+                raw_target = np.clip(raw_target * min(max_stim, 180.0) / 180.0, 0.0, 180.0)
+            
+            log_target = log_compress_intensity(raw_target, 180.0)
+            pin_targets[int(best_pin)] = max(pin_targets.get(int(best_pin), 0.0), log_target)
+
         for i, ch_lbl in enumerate(channels):
             servo_pin = (i+1)*2
-            msc.set_intensity(int(stims[i]*100), servo_pin)
+            target_intensity = pin_targets.get(servo_pin, 0.0)
+            smoothed = int((ball_smoothed_pin_intensity.get(servo_pin, 0) * (1.0 - ball_smoothing_alpha)) + (target_intensity * ball_smoothing_alpha))
+            ball_smoothed_pin_intensity[servo_pin] = int(np.clip(smoothed, 0, 180))
+            msc.set_servo(ball_smoothed_pin_intensity[servo_pin], servo_pin)
             y_offset = 450 + (i * 50)
-            screen.blit(font_small.render(f"{ch_lbl} {stims[i]:.2f} / 1.00 Intensity", True, TEXT_WHITE), (60, y_offset))
+            screen.blit(font_small.render(f"{ch_lbl} {ball_smoothed_pin_intensity[servo_pin]:.0f} / 180 Intensity", True, TEXT_WHITE), (60, y_offset))
             pygame.draw.rect(screen, (50, 55, 65), (60, y_offset + 18, 400, 12), border_radius=3)
-            pygame.draw.rect(screen, VOLTAGE_RED, (60, y_offset + 18, int(400 * stims[i]), 12), border_radius=3)
+            pygame.draw.rect(screen, VOLTAGE_RED, (60, y_offset + 18, int(400 * (ball_smoothed_pin_intensity[servo_pin] / 180.0)), 12), border_radius=3)
 
         # Right Side Visualizer Rendering Canvas Panel Window
         bx, by = 710, 320
@@ -723,15 +756,22 @@ while True:
         print(df[['IM','RP','T']].dropna(how='all').head())
         # plt.imshow(hmap)
         # plt.show()
+        used_pins = []
         for current_curl in mapping_curls:
-            best_pin, mapper = calib.build_curl_controller(df, 
-                                                           others=[other_curl for other_curl in mapping_curls if other_curl != current_curl],
-                                                           target=current_curl)
+            best_pin, mapper, max_stim = calib.build_curl_controller(
+                df,
+                others=[other_curl for other_curl in mapping_curls if other_curl != current_curl],
+                target=current_curl,
+                exclude_pins=used_pins,
+            )
+            if not pd.isna(best_pin):
+                used_pins.append(best_pin)
             controller_df.at[current_curl, 'best_pin'] = best_pin
             controller_df.at[current_curl, 'mapper'] = mapper
+            controller_df.at[current_curl, 'max_stim'] = max_stim
         new_raw = df.drop(columns=['IMCURL','RPCURL','TCURL'])
         print(controller_df)
-        calib.plot_mappings(df_raw=new_raw,controller_df=controller_df,curls=mapping_curls)
+        # calib.plot_mappings(df_raw=new_raw,controller_df=controller_df,curls=mapping_curls)
         # Placeholder for potential future implementation of servo mapping optimization logic
         time.sleep(2) # Simulate processing delay
         APP_STATE = "MENU"

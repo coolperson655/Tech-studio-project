@@ -228,11 +228,14 @@ def create_mapping_df(servo_pins:list,
         return return_df
 
 
-def build_curl_controller(df, target="IMCURL", others=("RPCURL", "TCURL"), thresh=0.05):
+def build_curl_controller(df, target="IMCURL", others=("RPCURL", "TCURL"), thresh=0.05, exclude_pins=None):
+
+    if exclude_pins is None:
+        exclude_pins = []
 
     reactive = df.dropna(subset=[target])
     if reactive.empty:
-        return np.nan, lambda u: np.nan
+        return np.nan, lambda u: np.nan, np.nan
 
     score = (
         reactive
@@ -244,28 +247,38 @@ def build_curl_controller(df, target="IMCURL", others=("RPCURL", "TCURL"), thres
         .groupby(level="servo pin")["selectivity"]
         .mean()
     )
+    if exclude_pins:
+        score = score[~score.index.isin(exclude_pins)]
     # import pdb;pdb.set_trace()
     score = pd.to_numeric(score, errors='coerce').fillna(0)
     if score.empty:
-        return np.nan, lambda u: np.nan
+        return np.nan, lambda u: np.nan, np.nan
 
     best_pin = score.idxmax()
+    remaining = score.drop(best_pin)
 
     pin_df = df.xs(best_pin, level="servo pin")
     pin_df = pin_df[pin_df[target].abs() > thresh]
+    while pin_df.empty and not remaining.empty:
+        best_pin = remaining.idxmax()
+        remaining = remaining.drop(best_pin)
+        pin_df = df.xs(best_pin, level="servo pin")
+        pin_df = pin_df[pin_df[target].abs() > thresh]
+
     if pin_df.empty:
-        return np.nan, lambda u: np.nan
+        return np.nan, lambda u: np.nan, np.nan
 
     stim = pin_df.index.to_numpy(dtype=float)
     curl = pin_df[target].to_numpy()
     if stim.size == 0 or curl.size == 0:
-        return np.nan, lambda u: np.nan
+        return np.nan, lambda u: np.nan, np.nan
 
     stim_norm = (stim - stim.min()) / (stim.max() - stim.min()) * 100
+    max_stim = float(stim.max())
 
     mapper = lambda u: np.interp(np.clip(u, 0, 100), curl.tolist(), stim_norm.tolist())
 
-    return best_pin, mapper
+    return best_pin, mapper, max_stim
 
 
 def compute_pin_heatmap(
