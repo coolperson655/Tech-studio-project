@@ -69,15 +69,14 @@ max_stim = 180
 starting_stim = 50
 stim_levels = range(starting_stim,max_stim+1)
 
-servo_pin_list = [2,4,6]#,8,10,12] # pins to calibrate back curl with
+servo_pin_list = [6,8,10]#,8,10,12] # pins to calibrate back curl with
 curls = ["IMCURL", "RPCURL", "TCURL","IM", "RP", "T"]
 mapping_curls = ["IM", "RP", "T"]
 multindex = pd.MultiIndex.from_product([servo_pin_list, stim_levels ], names=["servo pin", "stim_level"])
 col_names = ['IM','RP','T','IMCURL','RPCURL','TCURL']
 df = pd.DataFrame(index=multindex, columns=col_names)
 controller_df = pd.DataFrame(index=curls,columns=['best_pin','mapper','max_stim'])
-check_color_dict = {'IM_COLOR':['Waiting...',CALIBRATION_RED], 'RP_COLOR': ['Waiting...',CALIBRATION_RED], 'T_COLOR': ['Waiting...',CALIBRATION_RED]}
-
+check_color_dict = {'Index/Middle_COLOR':['Waiting...',CALIBRATION_RED], 'Ring/Pinky_COLOR': ['Waiting...',CALIBRATION_RED], 'Thumb_COLOR': ['Waiting...',CALIBRATION_RED]}
 calibration_state = "idle"
 calibration_pin_index = 0
 calibration_intensity = starting_stim
@@ -520,9 +519,12 @@ while True:
         combined_tricep = (-shock_value) * chosen_weight_lbs / 30.0 if shock_value < 0 else 0.0
 
         # Scale by absolute arm angle magnitude for smooth control
-        arm_magnitude = math.log(abs(shock_value),1000) + 1
-        target_bicep = int(combined_bicep * arm_magnitude * 100)
-        target_tricep = int(combined_tricep * arm_magnitude * 100)
+        try:
+            arm_magnitude = math.log(abs(shock_value),1000) + 1
+        except:
+            arm_magnitude = abs(shock_value)
+        target_bicep = int(combined_bicep * arm_magnitude * 180)
+        target_tricep = int(combined_tricep * arm_magnitude * 180)
         # target_bicep = math.log(target_bicep,80) + 1
         # target_tricep = math.log(target_tricep,80) + 1
 
@@ -531,7 +533,7 @@ while True:
         smoothed_bicep_intensity = int((smoothed_bicep_intensity * (1.0 - smoothing_alpha)) + (target_bicep * smoothing_alpha))
         smoothed_tricep_intensity = int((smoothed_tricep_intensity * (1.0 - smoothing_alpha)) + (target_tricep * smoothing_alpha))
 
-        smoothed_bicep_intensity = np.clip(smoothed_bicep_intensity, 0, 180)
+        smoothed_bicep_intensity = np.clip(smoothed_bicep_intensity, 0, 150)
         smoothed_tricep_intensity = np.clip(smoothed_tricep_intensity, 0, 180)
         
         msc.set_servo(smoothed_bicep_intensity, 4)
@@ -636,7 +638,7 @@ while True:
         screen.blit(font_small.render("Target Curl: {:.2f} | Tolerance: ±{:.2f} | Max Rate: {:.2f}".format(TARGET_CURL, CURL_TOLERANCE, MAX_CURL_RATE), True, TEXT_MUTED), (60, 150))
 
         panel_positions = [(50, 220), (350, 220), (650, 220)]
-        finger_labels = ['IM', 'RP', 'T']
+        finger_labels = ['Index/Middle', 'Ring/Pinky', 'Thumb']
         for idx, (label, pos) in enumerate(zip(finger_labels, panel_positions)):
             px, py = pos
             panel_color = check_color_dict[f"{label}_COLOR"][1]
