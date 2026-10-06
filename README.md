@@ -4,6 +4,9 @@ awe yeah we love documentation
 # Python Environment
 uv for python environment my goat [https://docs.astral.sh/uv/getting-started/installation/](here's the install)]
 
+# Overview
+This project uses an off the shelf electroacupucture machine contoled by servos to give feedback to a simulated ball game running on pygame. The hand data is from a quest 3 running hand tracking streamer which is converted to finger curl values for the simulated ball. The TENS electrodes require some trail and error to get in the correct spot to pull back on the fingers, but once in place will give feedback proportional to the simulated ball's "squeeze level".
+
 # Demos
 ## Multi_servo_control.py
 `Multi_servo_control.py` contains code to set the positions of the servo.
